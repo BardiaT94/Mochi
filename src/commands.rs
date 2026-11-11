@@ -146,7 +146,7 @@ commands! {
     Timeline, "timeline", Folder, "Timeline", "Files changed in the last month anywhere in your home folder, newest first, by day.", [];
     Computer, "computer", Folder, "Computer", "Show drives and volumes; open an unmounted one to mount it.", [];
     ConnectServer, "connect_server", Folder, "Connect To Server…", "Open a network share (smb, sftp, ftp, WebDAV) by its address.", [];
-    Refresh, "refresh", Folder, "Refresh", "Re-read this folder and reload previews, keeping scroll and selection.", ["Ctrl+R", "Alt+R"];
+    Refresh, "refresh", Folder, "Refresh", "Re-read this folder and reload previews, keeping scroll and selection.", ["F5", "Ctrl+R", "Alt+R"];
     Activate, "activate", Folder, "Open", "Open the selected folder here or open files with their default app.", ["Enter"];
     OpenInNewTab, "open_in_new_tab", Folder, "Open In New Tab", "Open selected folders in new tabs; files open their containing folder.", ["Ctrl+Enter"];
     OpenInNewWindow, "open_in_new_window", Folder, "Open In New Window", "Open the selected folder (or this one) in a separate window.", ["Ctrl+N"];
@@ -160,7 +160,7 @@ commands! {
     Jump, "jump", Folder, "Jump To Folder…", "Go to a folder you use often by a few letters of its name; with zoxide installed, its folders too.", ["Ctrl+G"];
     GoToMark, "go_to_mark", Folder, "Go To Mark…", "Go back to a place marked with a letter.", ["Ctrl+Quote"];
     RunTask, "run_task", Folder, "Run Task…", "Run a script, target or recipe of this project in your terminal.", ["Ctrl+Shift+B"];
-    ToggleBookmark, "toggle_bookmark", Folder, "Toggle Bookmark", "Add or remove the current folder (or selection) from bookmarks.", ["Ctrl+D"];
+    ToggleBookmark, "toggle_bookmark", Folder, "Toggle Bookmark", "Add or remove the current folder (or selection) from bookmarks.", [];
     OpenLinkTarget, "open_link_target", Folder, "Open Link Target Location", "Go to the folder containing a symlink's target.", [];
     TabNewOrRecent, "path_dropdown", Folder, "Subfolder Menu", "List the subfolders of the current folder for quick descent.", ["Alt+Down"];
 
@@ -189,12 +189,12 @@ commands! {
     LastTab, "select_last_tab", Tabs, "Select Last Tab", "Switch to the rightmost tab.", ["Ctrl+9"];
     TabSearch, "tab_search", Tabs, "Search Tabs", "Find an open or recently closed tab by name.", ["Ctrl+Shift+E"];
 
-    SplitRight, "split_right", Panels, "Split Right", "Split this panel and show the current tab on the right.", ["Ctrl+Shift+S"];
-    SplitBottom, "split_bottom", Panels, "Split Bottom", "Split this panel and show the current tab below.", ["Ctrl+S"];
+    SplitRight, "split_right", Panels, "Split Right", "Split this panel and show the current tab on the right.", ["Ctrl+S"];
+    SplitBottom, "split_bottom", Panels, "Split Bottom", "Split this panel and show the current tab below.", ["Ctrl+Shift+S"];
     ClosePanel, "close_panel", Panels, "Close Panel", "Close this panel and all its tabs.", ["Ctrl+Shift+F4"];
     FocusNextPanel, "focus_next_panel", Panels, "Focus Next Panel", "Move keyboard focus to the next panel.", ["Tab"];
     FocusPrevPanel, "focus_prev_panel", Panels, "Focus Previous Panel", "Move keyboard focus to the previous panel.", ["Shift+Tab"];
-    CopyToOther, "copy_to_other_panel", Panels, "Copy To Other Panel", "Copy the selection into the folder of the previously focused panel.", ["F5"];
+    CopyToOther, "copy_to_other_panel", Panels, "Copy To Other Panel", "Copy the selection into the folder of the previously focused panel.", [];
     MoveToOther, "move_to_other_panel", Panels, "Move To Other Panel", "Move the selection into the folder of the previously focused panel.", ["F6"];
     ComparePanels, "compare_panels", Panels, "Compare Panels", "Mark what only one panel has, what is newer and what differs in size.", [];
     SelectDifferences, "select_differences", Panels, "Select Differences", "Select the entries Compare Panels marks in this panel.", [];
@@ -272,6 +272,9 @@ commands! {
     SortFullAsc, "sort_percent_full_asc", Sort, "Sort By Percent Full Asc", "Drives with the most free space first (Computer only).", [];
     SortFullDesc, "sort_percent_full_desc", Sort, "Sort By Percent Full Desc", "Fullest drives first (Computer only).", [];
     SortColour, "sort_colour", Sort, "Sort By Colour", "Pictures by their main colour, red through violet, then the greys; the rest last.", [];
+    SortAscending, "sort_ascending", Sort, "Sort Ascending", "Keep what it is sorted by, A to Z, smallest or oldest first.", [];
+    SortDescending, "sort_descending", Sort, "Sort Descending", "Keep what it is sorted by, Z to A, largest or newest first.", [];
+    SortReverse, "sort_reverse", Sort, "Reverse Sort Order", "Switch between ascending and descending.", [];
     ToggleFoldersFirst, "toggle_folders_first", Sort, "Toggle Folders First", "Switch between listing folders first or files first.", [];
 
     ToggleInspector, "toggle_inspector", Inspector, "Toggle Inspector", "Preview the item under the cursor beside the list.", ["Space", "Ctrl+I"];
@@ -356,6 +359,7 @@ commands! {
     CompressTarGz, "compress_tar_gz", Files, "Compress To Tar.gz", "Pack the selection into a .tar.gz archive.", [];
     CompressTarXz, "compress_tar_xz", Files, "Compress To Tar.xz", "Pack the selection into a .tar.xz archive.", [];
     Compress7z, "compress_7z", Files, "Compress To 7z", "Pack the selection into a .7z archive.", [];
+    CompressParts, "compress_parts", Files, "Compress In Parts…", "Pack the selection into an archive cut into parts of the size you choose (name.7z.001, name.7z.002, …), to fit on a drive or a mail; 7-Zip opens the first part.", [];
     CompressLocked, "compress_locked", Files, "Compress With Password…", "Pack the selection into a .zip (AES-256) or a .7z that opens only with the password you type; a 7z hides the names too.", [];
     ConvertJpg, "convert_jpg", Files, "Convert To JPG", "Save a JPG copy of each selected picture beside it, upright and on white where it was see-through.", [];
     ConvertPng, "convert_png", Files, "Convert To PNG", "Save a PNG copy of each selected picture beside it.", [];
@@ -396,12 +400,12 @@ commands! {
     OpenConfig, "open_config", Misc, "Open Config", "Open the settings file in your editor.", [];
     RevealConfig, "reveal_config", Misc, "Reveal Config Folder", "Open the folder that holds Maia's settings.", [];
     ResetConfig, "reset_config", Misc, "Reset Settings", "Restore all options and hotkeys to defaults (asks first).", [];
-    Install, "install", Misc, "Install Maia", "Add Maia to your app launcher and ~/.local/bin.", [];
+    Install, "install", Misc, "Install Mochi", "Add Mochi to your app launcher and ~/.local/bin.", [];
     SetDefault, "set_default_fm", Misc, "Set As Default File Manager", "Make Maia open folders for other apps.", [];
-    Uninstall, "uninstall", Misc, "Uninstall Maia", "Remove the launcher entry and installed binary.", [];
+    Uninstall, "uninstall", Misc, "Uninstall Mochi", "Remove the launcher entry and installed binary.", [];
     Welcome, "welcome_tour", Misc, "Welcome Tour", "The pages shown on the first start: what Maia does, and a few choices to make it yours.", [];
     WhatsNew, "whats_new", Misc, "What's New in Maia", "What this version added, with the main changes shown at work.", [];
-    About, "about", Misc, "About Maia", "Version and credits.", [];
+    About, "about", Misc, "About Mochi", "Version and credits.", [];
 }
 
 // ---------------------------------------------------------------- hotkeys

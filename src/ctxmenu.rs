@@ -19,6 +19,8 @@ pub enum Act {
     OtherApp,
     Custom(usize),
     Terminal(PathBuf),
+    /// Mochi: open this folder in Kiro (`kiro ./` there).
+    Kiro(PathBuf),
     /// Sidebar actions on one place: (what, panel to act in).
     Place(PlaceAct, u64),
     /// Mount, unmount or eject the target drives.
@@ -213,51 +215,32 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
                 items.push(Item::cmd(Cmd::ShelfCopyHere));
             }
             items.push(Item { id: "terminal_here".into(), label: "Open Terminal Here".into(), act: Act::Terminal(here.clone()), children: vec![] });
+            items.push(Item { id: "kiro".into(), label: "Open in Kiro".into(), act: Act::Kiro(here.clone()), children: vec![] });
             items.push(Item::sep());
         }
+        // Mochi: View lives in the status bar; Group by, hidden files and Refresh in the
+        // ⋮ menu and their keys.
         items.push(Item::cmd(Cmd::SelectAll));
-        items.push(Item::sub("view", "View", vec![
-            Item::labeled(Cmd::ViewDetails, "Details"),
-            Item::labeled(Cmd::ViewTree, "Tree"),
-            Item::labeled(Cmd::ViewList, "List"),
-            Item::labeled(Cmd::ViewMedium, "Medium icons"),
-            Item::labeled(Cmd::ViewLarge, "Large icons"),
-            Item::labeled(Cmd::ViewXL, "Extra large icons"),
-            Item::labeled(Cmd::ViewColumns, "Columns"),
-            Item::labeled(Cmd::ViewStack, "Stack"),
-        ]));
         items.push(Item::sub("sort", "Sort by", vec![
             Item::labeled(Cmd::SortName, "Name"),
             Item::labeled(Cmd::SortSize, "Size"),
             Item::labeled(Cmd::SortModified, "Date modified"),
             Item::labeled(Cmd::SortCreated, "Date created"),
             Item::labeled(Cmd::SortType, "Type"),
-            Item::labeled(Cmd::ToggleFoldersFirst, "Toggle folders first"),
+            Item::sep(),
+            Item::labeled(Cmd::SortAscending, "Ascending"),
+            Item::labeled(Cmd::SortDescending, "Descending"),
+            Item::sep(),
+            Item::labeled(Cmd::ToggleFoldersFirst, "Folders first"),
         ]));
-        let in_trash_files = crate::trashcan::is_trash_files(&here);
-        let group_items: Vec<Item> = crate::commands::GROUP_CMDS
-            .iter()
-            .filter(|c| match c {
-                Cmd::GroupDeleted | Cmd::GroupOriginal => in_trash_files,
-                Cmd::GroupFree | Cmd::GroupFs | Cmd::GroupFull => computer,
-                Cmd::GroupNone => true,
-                _ => !computer,
-            })
-            .map(|&c| Item::labeled(c, if c == Cmd::GroupNone { "None" } else { c.info().title.trim_start_matches("Group By ") }))
-            .collect();
-        items.push(Item::sub("group", "Group by", group_items));
-        items.push(Item::cmd(Cmd::SavedView));
-        items.push(Item::cmd(Cmd::ToggleHidden));
-        items.push(Item::cmd(Cmd::Refresh));
         if computer {
             items.push(Item::cmd(Cmd::ConnectServer));
         } else if !in_trash && t.archive.is_none() {
-            items.push(Item::cmd(Cmd::FindDuplicates));
+            // Mochi: Find Duplicates and Tidy Folder are in the ⋮ menu.
             if !t.filter.trim().is_empty() && !t.content.on && t.smart.is_none() {
                 items.push(Item::cmd(Cmd::SaveSmart));
             }
             items.push(Item::cmd(Cmd::SpaceUsed));
-            items.push(Item::cmd(Cmd::TidyFolder));
         }
         if in_trash {
             items.push(Item::sep());
@@ -265,7 +248,6 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         }
         if !computer {
             items.push(Item::sep());
-            items.push(Item::cmd(Cmd::ToggleBookmark));
             items.push(Item::cmd(Cmd::Properties));
         }
     } else if t.archive.is_some() {
@@ -281,15 +263,13 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         let drives: Vec<crate::drives::Drive> = ents.iter().filter_map(|e| app.drive_at(&e.0)).collect();
         let mounted: Vec<&PathBuf> = ents.iter().filter(|e| tab::drive_dev(&e.0).is_none()).map(|e| &e.0).collect();
         items.push(Item::labeled(Cmd::Activate, "Open"));
-        let mut open_in = vec![Item::labeled(Cmd::OpenInNewTab, "New Tab"), Item::labeled(Cmd::OpenInRightSplit, "Right Split"), Item::labeled(Cmd::OpenInBottomSplit, "Bottom Split")];
+        // Mochi: the drive's "Open in …" in one submenu, without tabs and splits.
         if mounted.len() == ents.len() {
-            open_in.push(Item::labeled(Cmd::OpenInNewWindow, "New Window"));
-        }
-        items.push(Item::sub("open_in", "Open in", open_in));
-        if mounted.len() == ents.len() {
+            let mut open_in = vec![Item::labeled(Cmd::OpenInNewWindow, "New Window")];
             if let [m] = mounted.as_slice() {
-                items.push(Item { id: "terminal_here".into(), label: "Open Terminal Here".into(), act: Act::Terminal((*m).clone()), children: vec![] });
+                open_in.push(Item { id: "terminal_here".into(), label: "Terminal".into(), act: Act::Terminal((*m).clone()), children: vec![] });
             }
+            items.push(Item::sub("open_in", "Open in", open_in));
         }
         items.push(Item::sep());
         items.push(Item::sub("copy_as", "Copy as", vec![Item::cmd(Cmd::CopyPath), Item::cmd(Cmd::CopyPathRaw)]));
@@ -321,12 +301,7 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
             kids.push(Item { id: "other_app".into(), label: "Other application…".into(), act: Act::OtherApp, children: vec![] });
             items.push(Item::sub("open_with_menu", "Open with", kids));
         }
-        if any_file || single {
-            items.push(Item::cmd(Cmd::OpenInEditor));
-        }
-        if crate::gitstatus::repo_for(&here).is_some() {
-            items.push(Item::cmd(Cmd::OpenWebLink));
-        }
+
         if let [a, b] = ents.as_slice() {
             if !a.1 && !b.1 {
                 items.push(Item::cmd(Cmd::CompareFiles));
@@ -337,9 +312,21 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
                 items.push(Item::cmd(Cmd::SetWallpaper));
             }
         }
-        items.push(Item::sub("open_in", "Open in", vec![Item::labeled(Cmd::OpenInNewTab, "New Tab"), Item::labeled(Cmd::OpenInRightSplit, "Right Split"), Item::labeled(Cmd::OpenInBottomSplit, "Bottom Split"), Item::labeled(Cmd::OpenInNewWindow, "New Window")]));
+        // Mochi: every "Open in …" under one submenu.
         let term_dir = if single && ents[0].1 { ents[0].0.clone() } else { here.clone() };
-        items.push(Item { id: "terminal_here".into(), label: "Open Terminal Here".into(), act: Act::Terminal(term_dir), children: vec![] });
+        let mut open_in = vec![];
+        if any_file || single {
+            open_in.push(Item::labeled(Cmd::OpenInEditor, "Editor"));
+        }
+        open_in.push(Item { id: "kiro".into(), label: "Kiro".into(), act: Act::Kiro(term_dir.clone()), children: vec![] });
+        open_in.push(Item { id: "terminal_here".into(), label: "Terminal".into(), act: Act::Terminal(term_dir), children: vec![] });
+        if all_dirs {
+            open_in.push(Item::labeled(Cmd::OpenInNewWindow, "New Window"));
+        }
+        if crate::gitstatus::repo_for(&here).is_some() {
+            open_in.push(Item::labeled(Cmd::OpenWebLink, "Web Browser (Git Host)"));
+        }
+        items.push(Item::sub("open_in", "Open in", open_in));
         if single && ents[0].2 {
             items.push(Item::cmd(Cmd::OpenLinkTarget));
         }
@@ -367,11 +354,10 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         if single && all_dirs {
             items.push(Item::labeled(Cmd::Paste, "Paste Into Folder"));
         }
-        items.push(Item::cmd(Cmd::CopyTo));
-        items.push(Item::cmd(Cmd::MoveTo));
         // The path as it is, where it is looked for; quoted and other forms under Copy as.
         items.push(Item::labeled(Cmd::CopyPathRaw, "Copy Path"));
-        let mut copy = vec![Item::cmd(Cmd::CopyPath), Item::cmd(Cmd::CopyName), Item::cmd(Cmd::CopyPathRelative)];
+        // Mochi: Copy Path above is the only path entry.
+        let mut copy = vec![Item::cmd(Cmd::CopyName), Item::cmd(Cmd::CopyPathRelative)];
         // path:line, for the file a search showed a line of.
         if p.line_hint.as_ref().is_some_and(|h| ents.iter().any(|e| e.0 == h.0)) {
             copy.push(Item::cmd(Cmd::CopyPathLine));
@@ -385,13 +371,7 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         if t.archive.is_none() {
             items.push(Item::cmd(Cmd::SendToPhone));
         }
-        if any_file && ents.iter().all(|e| !e.1) {
-            items.push(Item::cmd(Cmd::Email));
-            let paper = ents.iter().all(|e| crate::sendto::printable(&e.0.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), &e.3));
-            if paper && crate::drives::Tools::current().is_some_and(|t| crate::sendto::cups(&t)) {
-                items.push(Item::cmd(Cmd::Print));
-            }
-        }
+
         items.push(Item::sep());
         if !single {
             items.push(Item::cmd(Cmd::BatchRename));
@@ -424,7 +404,7 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         if ents.iter().any(|e| !e.1 && crate::archive::is_archive(&e.0.to_string_lossy())) {
             items.push(Item::cmd(Cmd::ExtractHere));
         }
-        items.push(Item::sub("compress", "Compress", vec![Item::labeled(Cmd::CompressZip, "Zip (.zip)"), Item::labeled(Cmd::CompressTarGz, "Tar.gz (.tar.gz)"), Item::labeled(Cmd::CompressTarXz, "Tar.xz (.tar.xz)"), Item::labeled(Cmd::Compress7z, "7-Zip (.7z)"), Item::labeled(Cmd::CompressLocked, "With a password…")]));
+        items.push(Item::sub("compress", "Compress", vec![Item::labeled(Cmd::CompressZip, "Zip (.zip)"), Item::labeled(Cmd::CompressTarGz, "Tar.gz (.tar.gz)"), Item::labeled(Cmd::CompressTarXz, "Tar.xz (.tar.xz)"), Item::labeled(Cmd::Compress7z, "7-Zip (.7z)"), Item::labeled(Cmd::CompressParts, "In parts (.7z.001, .002, …)…"), Item::labeled(Cmd::CompressLocked, "With a password…")]));
         if !in_trash && t.archive.is_none() && crate::musictags::applies(&ents.iter().map(|e| (e.3.as_str(), e.1)).collect::<Vec<_>>()) {
             items.push(Item::labeled(Cmd::EditTags, "Edit Tags…"));
         }
@@ -448,30 +428,18 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
             }
             items.push(Item::sub("gitignore", "Add to .gitignore", kids));
         }
-        items.push(Item::cmd(Cmd::CreateLink));
         if in_trash {
             items.push(Item::cmd(Cmd::RestoreTrash));
         }
         items.push(Item::cmd(Cmd::DeletePermanent));
         items.push(Item::sep());
-        if t.archive.is_none() && !in_trash {
-            items.push(Item::sub("tags", "Tags", tag_items(&ents.iter().map(|e| e.0.clone()).collect::<Vec<_>>())));
-        }
-        if all_dirs {
-            items.push(Item::cmd(Cmd::ToggleBookmark));
-        }
+        // Mochi: no Tags, bookmark or What's Using This entries.
         if !in_trash && t.archive.is_none() {
             let all = ents.iter().all(|e| app.pinned_set.contains(&e.0));
             items.push(Item::labeled(Cmd::PinToTop, if all { "Unpin" } else { "Pin To Top" }));
         }
-        if !in_trash {
-            items.push(Item::cmd(Cmd::WhatsUsing));
-        }
         if !in_trash && ents.iter().any(|e| !app.shelf.has(&e.0)) {
             items.push(Item::labeled(Cmd::AddToShelf, "Add to Shelf"));
-        }
-        if single && !ents[0].1 && !in_trash {
-            items.push(Item::cmd(Cmd::PreviousVersions));
         }
         items.push(Item::cmd(Cmd::Properties));
     }
@@ -520,8 +488,7 @@ pub fn build_place(panel: u64, path: PathBuf, bookmarked: bool, drive: Option<cr
         items.push(Item { id: "terminal_here".into(), label: "Open Terminal Here".into(), act: Act::Terminal(path.clone()), children: vec![] });
         items.push(Item::sep());
         items.push(place("copy_path", "Copy As Path", PlaceAct::CopyPath));
-        items.push(Item::sep());
-        items.push(if bookmarked { place("unbookmark", "Remove Bookmark", PlaceAct::RemoveBookmark) } else { place("bookmark", "Add Bookmark", PlaceAct::AddBookmark) });
+        let _ = bookmarked;
         if let Some(uri) = network {
             items.push(Item::sep());
             items.push(Item { id: "disconnect".into(), label: "Disconnect".into(), act: Act::Disconnect(uri), children: vec![] });
@@ -690,11 +657,19 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
         }
     }
     // Current choices, shown as radio marks on View / Sort by / Group by entries.
-    let (cur_group, cur_sort, cur_zoom, cur_columns, cur_stack) = app.panels.get(&app.active).map(|p| {
+    let (cur_group, cur_sort, cur_zoom, cur_columns, cur_stack, cur_desc) = app.panels.get(&app.active).map(|p| {
         let s = &p.tab().settings;
-        (s.group, s.sort, s.zoom, s.column_view, s.stack_view)
-    }).unwrap_or((crate::config::GroupBy::None, crate::config::SortKey::Name, 0.0, false, false));
+        (s.group, s.sort, s.zoom, s.column_view, s.stack_view, s.desc)
+    }).unwrap_or((crate::config::GroupBy::None, crate::config::SortKey::Name, 0.0, false, false, false));
+    let folders_first = app.cfg.folders_first;
     let radio_of = |c: Cmd| -> Option<bool> {
+        // Mochi: which way it is sorted, and folders first, marked too.
+        match c {
+            Cmd::SortAscending => return Some(!cur_desc),
+            Cmd::SortDescending => return Some(cur_desc),
+            Cmd::ToggleFoldersFirst => return Some(folders_first),
+            _ => {}
+        }
         if let Some(g) = c.group_key() {
             return Some(g == cur_group);
         }
@@ -728,8 +703,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
         vz.map(|z: f32| !cur_columns && !cur_stack && crate::listing::view_name(z) == crate::listing::view_name(cur_zoom))
     };
     let screen = ctx.content_rect();
-    let row_h = crate::popups::MENU_ROW;
-    let w = 340.0;
+    // Mochi: taller rows and text at the interface's size.
+    let row_h = (app.cfg.font_size * 1.4 + 12.0).round();
+    let w = 380.0;
     // The menu's height as drawn: rows and separators each with the Spacing gap after
     // them, the search row and the margins. Short of it, a menu opened low ran off the
     // bottom of the window.
@@ -746,9 +722,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
         crate::frost::behind(ui, 10);
         egui::Frame::NONE
             .fill(crate::frost::fill(pal.raised))
-            .stroke(Stroke::new(1.0, pal.border))
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(egui::Margin::same(5))
+            .stroke(Stroke::new(1.0, pal.border.gamma_multiply(0.6)))
+            .corner_radius(CornerRadius::same(crate::mochi::POPUP_R))
+            .inner_margin(egui::Margin::same(8))
             .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 22, spread: 0, color: egui::Color32::from_black_alpha(90) })
             .show(ui, |ui| {
                 ui.set_width(w - 10.0);
@@ -838,7 +814,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         // An opened submenu near the bottom: scroll so all of it shows.
                         if st.reveal.as_deref() == Some(it.id.as_str()) {
                             let kids = rows[i + 1..].iter().take_while(|row| row.0 > *depth).count();
-                            ui.scroll_to_rect(Rect::from_min_size(r.min, vec2(r.width(), row_h * (kids + 1) as f32)), None);
+                            ui.scroll_to_rect(Rect::from_min_size(r.min, vec2(r.width(), (row_h + gap) * (kids + 1) as f32)), None);
                             st.reveal = None;
                         }
                         let hovered = resp.hovered();
@@ -851,13 +827,12 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         // mark at its edge. Only a high-contrast theme keeps the solid fill,
                         // and with it the colours made for it (`loud`).
                         if sel {
-                            crate::kit::chosen(ui.painter(), r, 6, &pal);
+                            ui.painter().rect_filled(r, CornerRadius::same(10), pal.selected);
                         }
                         let loud = sel && pal.strong;
                         let on = if loud { pal.on_sel() } else { pal.text };
                         // Fixed icon column; nested entries indent one step per level.
-                        // Clear of the chosen row's accent mark at its edge.
-                        let ic = Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), Vec2::splat(16.0));
+                        let ic = Rect::from_center_size(pos2(r.left() + 18.0, r.center().y), Vec2::splat(18.0));
                         if let Act::OpenWith(id) = &it.act {
                             if let Some(a) = crate::mime::apps().by_id(id) {
                                 crate::icons::named(ui.painter(), ic, &a.icon);
@@ -865,6 +840,12 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         }
                         if let Act::Terminal(_) = &it.act {
                             crate::icons::named(ui.painter(), ic, "utilities-terminal");
+                        }
+                        if let Act::Kiro(_) = &it.act {
+                            // Its icon is in few themes; a code mark otherwise.
+                            if !crate::icons::named(ui.painter(), ic, "kiro") {
+                                crate::theme::paint_symbol(ui.painter(), ic.shrink(1.0), "code", if loud { pal.on_sel() } else { pal.text_dim });
+                            }
                         }
                         if let Act::Tag(name, _) = &it.act {
                             match crate::tags::color_of(name) {
@@ -874,7 +855,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                                 None => paint_glyph(ui.painter(), ic.shrink(1.5), Glyph::Tag, if loud { pal.on_sel() } else { pal.text_dim }),
                             }
                         }
-                        let x0 = r.left() + 34.0 + *depth as f32 * 22.0;
+                        let x0 = r.left() + 40.0 + *depth as f32 * 22.0;
                         let enabled = match &it.act {
                             Act::Cmd(c) => !matches!(c, Cmd::Paste) || app.clipboard.is_some() || true,
                             _ => true,
@@ -885,7 +866,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                             let mut job = egui::text::LayoutJob::default();
                             for (ci, ch) in label.chars().enumerate() {
                                 let col = if hits.contains(&ci) && !loud { pal.accent } else if enabled { on } else { pal.text_dim };
-                                job.append(&ch.to_string(), 0.0, egui::TextFormat { font_id: FontId::proportional(12.5), color: col, ..Default::default() });
+                                job.append(&ch.to_string(), 0.0, egui::TextFormat { font_id: FontId::proportional(app.cfg.font_size), color: col, ..Default::default() });
                             }
                             job
                         };
@@ -999,6 +980,11 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
             Act::Terminal(dir) => {
                 if let Err(e) = crate::mime::open_terminal(&dir) {
                     app.toast(format!("Couldn't start a terminal: {e}"));
+                }
+            }
+            Act::Kiro(dir) => {
+                if let Err(e) = crate::mochi::open_kiro(&dir) {
+                    app.toast(format!("Couldn't start Kiro: {e}"));
                 }
             }
             Act::Place(a, panel) => {

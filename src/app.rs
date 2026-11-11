@@ -403,6 +403,7 @@ impl App {
         let first = [config::config_path(), config::userdata_path(), config::session_path()].iter().all(|p| !p.exists());
         let cfg = config::load_config();
         let ud = config::load_userdata();
+        crate::mochi::sync_accent(&cfg.accent);
         let mut pal = theme::palette(cfg.theme);
         if !cfg.syntax_theme {
             pal.syntax = theme::Syntax::classic(pal.dark);
@@ -521,7 +522,8 @@ impl App {
         }
         if !restored {
             let id = app.alloc_id();
-            let first = paths.first().cloned().unwrap_or_else(fsx::home);
+            // Mochi: a launch without folders opens on the Desktop.
+            let first = paths.first().cloned().unwrap_or_else(|| dirs::desktop_dir().filter(|d| d.is_dir()).unwrap_or_else(fsx::home));
             let t = app.make_tab(first);
             let mut p = Panel::new(id, t);
             for extra in paths.iter().skip(1) {
@@ -1276,9 +1278,9 @@ impl App {
             let mut p = Panel::new(pid, tabs.remove(0));
             p.tabs.extend(tabs);
             p.active = ps.active.min(p.tabs.len() - 1);
-            if ps.inspector {
-                p.inspector = Some(Inspector::default());
-            }
+            // Mochi: every panel opens with its preview (`Panel::new`), whatever the last
+            // session had.
+            let _ = ps.inspector;
             ids.push(pid);
             new_panels.insert(pid, p);
         }
@@ -1421,6 +1423,9 @@ impl App {
             crate::ui::POPUPS.with(|c| c.borrow_mut().clear());
         }
         self.heal();
+        if crate::mochi::sync_accent(&self.cfg.accent) {
+            self.theme_applied.1 = -1.0;
+        }
         let t = (self.preview_theme.unwrap_or(self.cfg.theme), self.cfg.font_size, self.cfg.spacing, self.cfg.animations, self.cfg.syntax_theme);
         self.preview_theme = None;
         crate::icons::set_enabled(self.cfg.system_icons);
@@ -2309,7 +2314,10 @@ impl App {
                 for e in entries {
                     self.thumbs.invalidate(&e);
                 }
-                self.stats.invalidate(&p);
+                self.stats.invalidate_tree(&p);
+                if let Some(r) = crate::gitstatus::repo_for(&p) {
+                    crate::gitstatus::rescan(&r.root);
+                }
                 if let Some(i) = self.panel().inspector.as_mut() {
                     i.invalidate();
                 }
@@ -2808,6 +2816,16 @@ impl App {
                 t.dirty = true;
                 t.scroll_to_cursor = true;
             }
+            Cmd::SortAscending | Cmd::SortDescending | Cmd::SortReverse => {
+                let t = self.tab();
+                t.settings.desc = match cmd {
+                    Cmd::SortAscending => false,
+                    Cmd::SortDescending => true,
+                    _ => !t.settings.desc,
+                };
+                t.dirty = true;
+                t.scroll_to_cursor = true;
+            }
             Cmd::ToggleReadme => {
                 // Back on everywhere, the folders it was closed in included.
                 self.cfg.show_readme = !self.cfg.show_readme;
@@ -3180,7 +3198,7 @@ impl App {
                 if tab::is_place(&dir) {
                     return;
                 }
-                let name = if cmd == Cmd::NewFolder { "New folder" } else { "New file.txt" };
+                let name = if cmd == Cmd::NewFolder { "New folder" } else { "New file.md" }; // Mochi: Markdown
                 let dest = fsx::unique_dest(&dir, name);
                 let r = if cmd == Cmd::NewFolder { std::fs::create_dir(&dest) } else { std::fs::File::create_new(&dest).map(|_| ()) };
                 match r {
@@ -3235,7 +3253,7 @@ impl App {
                     crate::convert::start(self, to);
                 }
             }
-            Cmd::CompressLocked | Cmd::CompressZip | Cmd::CompressTarGz | Cmd::CompressTarXz | Cmd::Compress7z => {
+            Cmd::CompressLocked | Cmd::CompressParts | Cmd::CompressZip | Cmd::CompressTarGz | Cmd::CompressTarXz | Cmd::Compress7z => {
                 if !crate::archive::available() {
                     self.toast(crate::archive::COMPRESS_NEEDS);
                     return;
@@ -3252,7 +3270,7 @@ impl App {
                     Cmd::Compress7z => crate::archwrite::Format::SevenZ,
                     _ => crate::archwrite::Format::Zip,
                 };
-                self.popup = Popup::Compress(crate::popups::CompressState::new(srcs, t.path.clone(), format, cmd == Cmd::CompressLocked));
+                self.popup = Popup::Compress(if cmd == Cmd::CompressParts { crate::popups::CompressState::in_parts(srcs, t.path.clone()) } else { crate::popups::CompressState::new(srcs, t.path.clone(), format, cmd == Cmd::CompressLocked) });
             }
             Cmd::CreateLink => {
                 let paths = self.tab().targets();

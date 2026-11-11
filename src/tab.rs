@@ -206,6 +206,9 @@ pub struct Tab {
     expand_rec: HashSet<PathBuf>,
     /// Every folder of the listing was unfolded at once (Ctrl+E in Tree view).
     pub expand_all_on: bool,
+    /// Mochi: the search walked into the subfolders (flattened) on its own, and folds
+    /// back when it is cleared.
+    pub auto_flat: bool,
     /// Flattened listing: when the recursive walk began, and how long it took once done.
     walk_started: Option<std::time::Instant>,
     pub walk_secs: Option<f32>,
@@ -309,6 +312,7 @@ impl Tab {
             tree_groups: HashMap::new(),
             expand_rec: HashSet::new(),
             expand_all_on: false,
+            auto_flat: false,
             walk_started: None,
             walk_secs: None,
             cursor_first: true,
@@ -1086,7 +1090,8 @@ impl Tab {
         };
         // Filters that apply to every row (top level and tree children).
         let row_ok = |e: &Entry| -> bool {
-            if e.is_dir && (!show_folders || flatten) || !e.is_dir && !show_files {
+            // Mochi: a search through the subfolders finds folders too.
+            if e.is_dir && (!show_folders || flatten && fq.is_empty()) || !e.is_dir && !show_files {
                 return false;
             }
             // A folder stays when something below it changed.

@@ -180,6 +180,11 @@ pub struct Screen {
     pub mouse_enc: Enc,
     /// Counts changes to what is shown: a search of the text is current while it holds.
     pub changes: u64,
+    /// Mochi: a cell's size in device pixels (told to programs that size pictures by it),
+    /// the pictures shown, and what the graphics protocol keeps between commands.
+    pub cell_px: (f32, f32),
+    pub images: Vec<crate::graphics::Image>,
+    pub gfx: crate::graphics::Store,
 }
 
 /// Where a character of a line of text is on the screen (see `Screen::line_text`).
@@ -235,7 +240,33 @@ impl Screen {
             mouse: Track::Off,
             mouse_enc: Enc::X10,
             changes: 0,
+            cell_px: crate::graphics::cell_px(),
+            images: vec![],
+            gfx: Default::default(),
         }
+    }
+
+    /// Mochi: the lasting number of the cursor's row.
+    pub fn cursor_line(&self) -> u64 {
+        self.dropped + (self.history() + self.cur.y) as u64
+    }
+
+    /// Mochi: past a picture `cols` × `rows` cells at the cursor: the column after it, on
+    /// its last row (scrolling as a line feed does).
+    pub fn move_past(&mut self, cols: usize, rows: usize) {
+        for _ in 1..rows {
+            self.newline();
+        }
+        self.cur.x = (self.cur.x + cols).min(self.cols - 1);
+        self.wrap_next = false;
+    }
+
+    /// Mochi: pictures on the screen's rows go with them (ED 2), and those of the
+    /// scrollback when it goes (ED 3).
+    fn drop_images(&mut self, scrollback: bool) {
+        let first = self.dropped + if scrollback { 0 } else { self.history() as u64 };
+        let alt = self.alt();
+        self.images.retain(|im| im.alt != alt || im.line + im.rows() <= first);
     }
 
     /// The alternate screen is shown (a full-screen program): no scrollback.
@@ -552,6 +583,7 @@ impl Screen {
             self.lines = lines;
             self.cur = cur;
             self.wrap_next = false;
+            self.images.retain(|im| !im.alt);
         }
     }
 
@@ -599,6 +631,7 @@ impl Screen {
         fresh.dropped = self.dropped;
         fresh.changes = self.changes;
         fresh.replies = std::mem::take(&mut self.replies);
+        fresh.cell_px = self.cell_px;
         *self = fresh;
         for y in 0..self.rows {
             self.erase(y, 0, self.cols);
@@ -972,8 +1005,12 @@ impl Perform for Screen {
                         (0..y).for_each(|r| self.erase(r, 0, cols));
                         self.erase(y, 0, x + 1);
                     }
-                    2 => (0..rows).for_each(|r| self.erase(r, 0, cols)),
+                    2 => {
+                        (0..rows).for_each(|r| self.erase(r, 0, cols));
+                        self.drop_images(false);
+                    }
                     3 if !self.alt() => {
+                        self.drop_images(true);
                         let h = self.history();
                         self.lines.drain(..h);
                         self.dropped += h as u64;
@@ -1010,6 +1047,12 @@ impl Perform for Screen {
                 }
             }
             ([], 'c') if ps[0] == 0 => self.replies.extend_from_slice(b"\x1b[?62;22c"),
+            // Mochi: the text area's size and a cell's, in pixels (pictures are sized by them).
+            ([], 't') if matches!(ps[0], 14 | 16) && self.cell_px.0 > 0.0 => {
+                let (w, h) = self.cell_px;
+                let (k, w, h) = if ps[0] == 14 { (4, w * self.cols as f32, h * self.rows as f32) } else { (6, w, h) };
+                self.replies.extend_from_slice(format!("\x1b[{k};{};{}t", h.round() as u32, w.round() as u32).as_bytes());
+            }
             ([b'>'], 'c') if ps[0] == 0 => self.replies.extend_from_slice(b"\x1b[>0;10;1c"),
             ([], 'n') => match ps[0] {
                 5 => self.replies.extend_from_slice(b"\x1b[0n"),
@@ -1116,15 +1159,23 @@ pub fn percent_decode(s: &str) -> String {
 pub struct Term {
     parser: vte::Parser,
     pub screen: Screen,
+    /// Mochi: kitty's graphics commands, taken out before the parser drops them.
+    apc: crate::graphics::Apc,
 }
 
 impl Term {
     pub fn new(cols: usize, rows: usize) -> Term {
-        Term { parser: vte::Parser::new(), screen: Screen::new(cols, rows) }
+        Term { parser: vte::Parser::new(), screen: Screen::new(cols, rows), apc: Default::default() }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.screen, bytes);
+        let (parser, screen) = (&mut self.parser, &mut self.screen);
+        self.apc.split(bytes, |seg| match seg {
+            crate::graphics::Seg::Text(t) => parser.advance(screen, t),
+            crate::graphics::Seg::Apc(a) => crate::graphics::command(screen, a),
+        });
+        let dropped = screen.dropped;
+        screen.images.retain(|im| im.alt || im.line + im.rows() > dropped);
         self.screen.changes += 1;
     }
 }

@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use egui::{self, Align2, Color32, CornerRadius, Event, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::app::{Action, App};
-use crate::commands::{self, ALL, Binding, Cat, Chord, Cmd};
+use crate::commands::{self, Binding, Cat, Chord, Cmd};
+use crate::mochi::COMMANDS as ALL;
 use crate::config::{CharKeyAction, IgnoredFiles, InspectorLayout, MiddleClick, SaveScope, SavedView, RecentsStore, Startup, ThumbMode, NewTabShows};
 use crate::ctxmenu::CtxState;
 use crate::fsx;
@@ -242,6 +243,8 @@ pub enum Popup {
     MainMenu,
     QuickMenu,
     PanelMenu { panel: u64, anchor: Pos2 },
+    /// Mochi: the sort button's menu.
+    SortMenu { panel: u64, anchor: Pos2 },
     PathMenu { panel: u64, path: PathBuf, anchor: Pos2 },
     PathDropdown(PathDropState),
     History { panel: u64, anchor: Pos2 },
@@ -423,11 +426,27 @@ pub struct CompressState {
     /// The field to focus on the next frame: the name, or (Compress With Password) the
     /// password.
     focus: Option<bool>,
+    /// Mochi: cut into parts, and their size in MB as typed.
+    pub parts: bool,
+    pub part_mb: String,
     /// The name last looked for in the folder, and whether something has it.
     taken: Option<(String, bool)>,
 }
 
 impl CompressState {
+    /// Compress In Parts: 7-Zip, cut into parts.
+    pub fn in_parts(srcs: Vec<PathBuf>, dir: PathBuf) -> CompressState {
+        let mut s = CompressState::new(srcs, dir, crate::archwrite::Format::SevenZ, false);
+        s.parts = true;
+        s
+    }
+
+    /// The parts' size in bytes, when cut into parts.
+    pub fn part_bytes(&self) -> Option<u64> {
+        let mb: f64 = self.part_mb.trim().replace(',', ".").parse().ok()?;
+        (self.parts && mb >= 1.0).then_some((mb * 1024.0 * 1024.0) as u64)
+    }
+
     pub fn new(srcs: Vec<PathBuf>, dir: PathBuf, format: crate::archwrite::Format, locked: bool) -> CompressState {
         // One item is named after itself ("photo.png" -> "photo.zip"); several, "Archive".
         let base = match srcs.as_slice() {
@@ -438,7 +457,7 @@ impl CompressState {
             _ => "Archive".to_string(),
         };
         let name = fsx::unique_dest(&dir, &format!("{base}{}", format.ext())).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        CompressState { srcs, dir, name, format, level: crate::archwrite::last_level(), password: String::new(), again: String::new(), focus: Some(locked), taken: None }
+        CompressState { srcs, dir, name, format, level: crate::archwrite::last_level(), password: String::new(), again: String::new(), focus: Some(locked), taken: None, parts: false, part_mb: "100".into() }
     }
 
     /// The name without the extension the format adds.
@@ -472,6 +491,9 @@ impl CompressState {
         }
         if self.taken.as_ref().is_some_and(|t| t.1) {
             return Some(format!("There is a “{}” here already", self.out().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+        }
+        if self.parts && self.part_bytes().is_none() {
+            return Some("A part is 1 MB at least".into());
         }
         if !self.password.is_empty() && self.lockable() {
             if self.password.contains(['\n', '\r']) {
@@ -553,6 +575,7 @@ impl Popup {
             Popup::MainMenu => "MainMenu",
             Popup::QuickMenu => "QuickMenu",
             Popup::PanelMenu { .. } => "PanelMenu",
+            Popup::SortMenu { .. } => "SortMenu",
             Popup::PathMenu { .. } => "PathMenu",
             Popup::PathDropdown(..) => "PathDropdown",
             Popup::History { .. } => "History",
@@ -779,17 +802,17 @@ pub(crate) fn step(sel: &mut usize, n: usize, k: &Keys, skip: impl Fn(usize) -> 
 /// The space inside a dialog's edge, and its corners: one measure for every dialog, so
 /// titles, lists and buttons line up the same way in each.
 pub(crate) const DIALOG_PAD: f32 = 20.0;
-pub(crate) const DIALOG_RADIUS: u8 = 12;
+pub(crate) const DIALOG_RADIUS: u8 = 24; // Mochi: Material dialogs are rounder
 
 /// A menu's or the palette's frame. Its shadow is lighter on a light theme, where the
 /// dark one's weight read as a smudge.
 pub(crate) fn popup_frame(pal: &Palette) -> egui::Frame {
     egui::Frame::NONE
         .fill(crate::frost::fill(pal.raised))
-        .stroke(Stroke::new(1.0, pal.border))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(egui::Margin::same(8))
-        .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if pal.dark { 90 } else { 34 }) })
+        .stroke(Stroke::new(1.0, pal.border.gamma_multiply(0.6)))
+        .corner_radius(CornerRadius::same(crate::mochi::POPUP_R))
+        .inner_margin(egui::Margin::same(10))
+        .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 32, spread: 0, color: Color32::from_black_alpha(if pal.dark { 120 } else { 45 }) })
 }
 
 /// A dialog's frame: `DIALOG_PAD` inside, rounder corners and a deeper, softer shadow
@@ -830,9 +853,9 @@ fn group_label(ui: &mut Ui, text: &str, pal: &Palette) {
 pub(crate) fn card<R>(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::NONE
         .fill(pal.card())
-        .stroke(Stroke::new(1.0, pal.card_line()))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(crate::mochi::INNER_R))
+        .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -973,7 +996,8 @@ fn pill_button(ui: &mut Ui, label: &str, role: Role, enabled: bool, pal: &Palett
         let rad = crate::kit::radius(h, crate::kit::round());
         let (fill, line, ink) = match (role, enabled) {
             (_, false) => (pal.card(), pal.card_line(), pal.text_dim.gamma_multiply(0.55)),
-            (Role::Main, _) => (if hot { pal.text } else { pal.text.gamma_multiply(0.9) }, Color32::TRANSPARENT, if pal.dark { pal.bg } else { pal.panel }),
+            // Mochi: the main button is filled in the accent, with the ink that reads on it.
+            (Role::Main, _) => (if hot { pal.accent } else { pal.accent.gamma_multiply(0.92) }, Color32::TRANSPARENT, crate::mochi::on_accent(pal)),
             (Role::Danger, _) => (if hot { pal.danger } else { pal.danger.gamma_multiply(0.9) }, Color32::TRANSPARENT, Color32::WHITE),
             (Role::Other, _) => (if hot { crate::kit::lift(pal) } else { pal.card() }, pal.card_line(), pal.text),
         };
@@ -1202,18 +1226,18 @@ pub(crate) fn hint_chips(ui: &mut Ui, items: &[(&str, &str)], pal: &Palette) {
 pub(crate) fn row(ui: &mut Ui, h: f32, selected: bool, pal: &Palette, paint: impl FnOnce(&Ui, Rect)) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
     if selected {
-        crate::kit::chosen(ui.painter(), r, 6, pal);
+        ui.painter().rect_filled(r, CornerRadius::same(10), pal.selected);
     } else if resp.hovered() {
-        ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(pal));
+        ui.painter().rect_filled(r, CornerRadius::same(10), crate::kit::touch(pal));
     }
     paint(ui, r);
     resp
 }
 
 /// A menu's text: a popup's own size, whatever the window's font, as the context menu's.
-pub(crate) const MENU_FONT: f32 = 12.5;
+pub(crate) const MENU_FONT: f32 = 14.0; // Mochi: larger menu text
 /// A menu's row, as the context menu's.
-pub(crate) const MENU_ROW: f32 = 26.0;
+pub(crate) const MENU_ROW: f32 = 32.0; // Mochi: taller menu rows
 /// Where a menu row's words start: after a column for a check (or the context menu's
 /// icons), so every row of every menu lines up.
 pub(crate) const MENU_TEXT_X: f32 = 34.0;
@@ -1299,8 +1323,8 @@ pub(crate) fn menu_note(ui: &mut Ui, text: &str, pal: &Palette) {
 /// A group's name inside a menu: small and dim, in line with the items' text below it,
 /// with room above it so it reads as the start of a group.
 pub(crate) fn menu_heading(ui: &mut Ui, text: &str, pal: &Palette) {
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 10.0, r.bottom() - 4.0), Align2::LEFT_BOTTOM, text, FontId::proportional(11.5), pal.text_dim);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+    ui.painter().text(pos2(r.left() + 10.0, r.bottom() - 4.0), Align2::LEFT_BOTTOM, text, FontId::proportional(12.5), pal.text_dim);
 }
 
 /// Between a menu's groups: a dashed rule, a division inside one thing.
@@ -1452,6 +1476,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context) {
             let (p, a) = (*panel, *anchor);
             quick_menu(app, ctx, Some((p, a)))
         }
+        Popup::SortMenu { panel, anchor } => sort_menu(app, ctx, *panel, *anchor),
         Popup::PathMenu { panel, path, anchor } => path_menu(app, ctx, *panel, path, *anchor),
         Popup::PathDropdown(st) => path_dropdown(app, ctx, st),
         Popup::History { panel, anchor } => history(app, ctx, *panel, *anchor),
@@ -1540,14 +1565,7 @@ fn goto_items(app: &App, st: &mut GoToState, known: &crate::sidebar::Known, ctx:
                 }
             }
         }
-        if !app.ud.bookmarks.is_empty() {
-            header(&mut items, "Bookmarks");
-            if !collapsed("Bookmarks") {
-                for b in &app.ud.bookmarks {
-                    push(&mut items, b);
-                }
-            }
-        }
+        // Mochi: no bookmarks.
         header(&mut items, "Storage");
         if !collapsed("Storage") {
             for (path, label, t, f) in &known.mounts {
@@ -1633,9 +1651,6 @@ fn goto_items(app: &App, st: &mut GoToState, known: &crate::sidebar::Known, ctx:
         }
         for (i, r) in app.ud.recents.iter().enumerate() {
             add(r.clone(), 40 - (i as i32).min(40), &mut cands);
-        }
-        for b in &app.ud.bookmarks {
-            add(b.clone(), 30, &mut cands);
         }
         for (_, p, _) in &known.places {
             add(p.clone(), 25, &mut cands);
@@ -2003,7 +2018,7 @@ pub(crate) fn applicable(app: &App, c: Cmd) -> bool {
         Cmd::Redo => app.undo.can_redo(),
         Cmd::ReopenTab => !app.closed_tabs.is_empty(),
         Cmd::EditTags => t.archive.is_none() && !t.path.starts_with(crate::sidebar::trash_dir()) && crate::musictags::applies(&t.target_entries().iter().map(|e| (e.ext(), e.is_dir)).collect::<Vec<_>>()),
-        Cmd::CompressLocked => t.archive.is_none() && !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
+        Cmd::CompressLocked | Cmd::CompressParts => t.archive.is_none() && !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
         Cmd::BatchRename => t.archive.is_none() && !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
         Cmd::CopyTo => !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
         Cmd::MoveTo => !tab::is_place(&t.path) && t.archive.is_none() && !t.targets_idx().is_empty(),
@@ -2180,7 +2195,7 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
     let q = fuzzy::Query::new(&st.query);
     let searching = !q.is_empty();
     let hits = if searching { find_commands(&app.ud, &st.query) } else { vec![] };
-    let quick: Vec<Cmd> = app.ud.quick.iter().filter_map(|id| Cmd::from_id(id)).collect();
+    let quick: Vec<Cmd> = app.ud.quick.iter().filter_map(|id| Cmd::from_id(id)).filter(|c| crate::mochi::COMMANDS.contains(c)).collect();
     let in_cat = |c: Cmd, cat: Cat| if cat == Cat::Quick { quick.contains(&c) } else { c.info().cat == cat };
     let count = |cat: Option<Cat>| match cat {
         None => hits.len(),
@@ -2863,9 +2878,6 @@ pub(crate) const OPTS: &[(Opt, Section, &str, &str, &str)] = &[
     (Opt::SizesNet, Section::Files, "Folder sizes", "Network locations", "NFS, SMB and other remote mounts."),
     (Opt::Thumbnails, Section::Files, "Thumbnails", "Load thumbnails", "Where pictures get previews in icon views."),
     (Opt::ThumbFill, Section::Files, "Thumbnails", "Thumbnail fill", "Crop to fill the square instead of fitting."),
-    (Opt::TrackRecents, Section::Files, "Recents", "Remember recents", "Visited folders and opened files."),
-    (Opt::HighlightRecents, Section::Files, "Recents", "Highlight recents", "Mark recently used items with a dot."),
-    (Opt::RecentsOnTop, Section::Files, "Recents", "Recents on top", "Sort recently used items first."),
     (Opt::CheckCopies, Section::Files, "Copies", "Check copies", "Read each copy back from the disk and compare it."),
     (Opt::TrashAge, Section::Files, "Trash", "Empty the trash", "What stays longer goes for good. Off unless you choose."),
     (Opt::CustomActions, Section::Files, "Right-click menu", "Custom actions", "Your own commands for the files you right-click."),
@@ -2879,7 +2891,6 @@ pub(crate) const OPTS: &[(Opt, Section, &str, &str, &str)] = &[
     (Opt::SelectionBoxes, Section::Mouse, "Clicks", "Selection boxes", "Checkboxes for picking several items."),
     (Opt::ReverseScroll, Section::Mouse, "Scrolling", "Reverse scroll direction", "Invert the mouse wheel."),
     (Opt::ScrollBeyond, Section::Mouse, "Scrolling", "Scroll beyond last item", "Scroll past the end of a list."),
-    (Opt::CharKey, Section::Mouse, "Keyboard", "Character keys", "What typing letters in a list does."),
     (Opt::InspectorLayout, Section::Preview, "", "Inspector layout", "Where the inspector docks."),
     (Opt::InspectorFont, Section::Preview, "", "Inspector font", "For text previews; empty uses monospace."),
     (Opt::InspectorFontSize, Section::Preview, "", "Inspector font size", "Text size in previews."),
@@ -2892,15 +2903,15 @@ pub(crate) const OPTS: &[(Opt, Section, &str, &str, &str)] = &[
     (Opt::Startup, Section::System, "Startup", "On startup", "What Maia shows when it starts."),
     (Opt::NewTab, Section::System, "Startup", "New tab shows", "The folder a new tab opens."),
     (Opt::DefaultFm, Section::System, "System", "Default file manager", "Open folders from other apps in Maia."),
-    (Opt::Picker, Section::System, "System", "Open and save dialog", "Pick files for other apps in Maia."),
-    (Opt::SingleInstance, Section::System, "System", "Reuse the open window", "Other apps and new launches open tabs here."),
+    (Opt::Picker, Section::System, "System", "Open and save dialog", "Pick files for other apps in Mochi."),
+    (Opt::SingleInstance, Section::System, "System", "Reuse the open window", "Folders other apps open become tabs here."),
     (Opt::AssetCache, Section::System, "System", "Asset cache size", "Memory for thumbnails and previews."),
     (Opt::Editor, Section::System, "Developer", "Editor", "Empty finds one; a command can use {file} and {line}."),
-    (Opt::Updates, Section::System, "Updates", "Check for updates", "Asks GitHub for a newer Maia, only when you check."),
+    (Opt::Updates, Section::System, "Updates", "Check for updates", "Rebuilds Mochi on Maia's newest commits, when asked."),
     (Opt::Tour, Section::System, "Updates", "What's new", "What this version added, and the welcome tour."),
     (Opt::ConfigFile, Section::System, "Settings", "Config file", "Every option as text, in your editor."),
     (Opt::ResetAll, Section::System, "Settings", "Reset to defaults", "Every option and hotkey; asks first."),
-    (Opt::Install, Section::System, "Settings", "Install Maia", "Add Maia to the app launcher and ~/.local/bin."),
+    (Opt::Install, Section::System, "Settings", "Install Mochi", "Add Mochi to the app launcher and ~/.local/bin."),
 ];
 
 /// The switch a sub-option sits under: it is indented below it and inert while it is off.
@@ -3081,15 +3092,22 @@ pub(crate) fn switch(ui: &mut Ui, on: &mut bool, pal: &Palette) -> bool {
 
 /// Switch: a pill whose colour and knob side say it, with no mark on the knob.
 fn toggle(ui: &mut Ui, on: &mut bool, pal: &Palette) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 16.0), Sense::click());
+    // Mochi: a Material 3 switch. Off: an outlined track and a small dim knob; on: an
+    // accent track and a large knob in the accent's ink carrying a check.
+    let (r, resp) = ui.allocate_exact_size(vec2(36.0, 20.0), Sense::click());
     crate::ui::note_control(ui, r, "switch");
     let t = ui.ctx().animate_bool(resp.id, *on);
     let lerp_c = |a: Color32, b: Color32| Color32::from_rgb(egui::lerp(a.r() as f32..=b.r() as f32, t) as u8, egui::lerp(a.g() as f32..=b.g() as f32, t) as u8, egui::lerp(a.b() as f32..=b.b() as f32, t) as u8);
-    let off_track = Color32::from_rgb(((pal.border.r() as u16 * 2 + pal.text_dim.r() as u16) / 3) as u8, ((pal.border.g() as u16 * 2 + pal.text_dim.g() as u16) / 3) as u8, ((pal.border.b() as u16 * 2 + pal.text_dim.b() as u16) / 3) as u8);
-    ui.painter().rect_filled(r, CornerRadius::same(8), lerp_c(off_track, pal.accent));
-    let x = egui::lerp(r.left() + 8.0..=r.right() - 8.0, t);
+    let off_track = crate::mochi::mix(pal.raised, pal.hover, 0.7);
+    ui.painter().rect(r, CornerRadius::same(10), lerp_c(off_track, pal.accent), Stroke::new(1.5 * (1.0 - t), pal.text_dim.gamma_multiply(0.7)), StrokeKind::Inside);
+    let x = egui::lerp(r.left() + 10.0..=r.right() - 10.0, t);
     let c = pos2(x, r.center().y);
-    ui.painter().circle_filled(c, 6.0, lerp_c(pal.bg, Color32::from_rgb(0xe8, 0xf4, 0xfa)));
+    let ink = crate::mochi::on_accent(pal);
+    ui.painter().circle_filled(c, egui::lerp(5.0..=7.5, t), lerp_c(pal.text_dim, ink));
+    if t > 0.5 {
+        let st = Stroke::new(1.5, pal.accent);
+        ui.painter().add(egui::Shape::line(vec![c + vec2(-2.8, 0.2), c + vec2(-0.9, 2.1), c + vec2(3.0, -1.9)], st));
+    }
     if resp.clicked() {
         *on = !*on;
         return true;
@@ -3338,7 +3356,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
         Opt::MiddleClick => pick(ui, "middle", &mut c.middle_click, &pal, &[(MiddleClick::OpenInSplit, "Open in split"), (MiddleClick::OpenInNewTab, "Open in new tab")]),
         Opt::InspectorLayout => pick(ui, "insp", &mut c.inspector_layout, &pal, &[(InspectorLayout::Auto, "Auto"), (InspectorLayout::Right, "Right"), (InspectorLayout::Bottom, "Bottom")]),
         Opt::Startup => {
-            let mut opts: Vec<(Startup, String)> = vec![(Startup::LastSession, "Last session".into()), (Startup::Home, "Home folder".into())];
+            let mut opts: Vec<(Startup, String)> = vec![(Startup::LastSession, "Last session".into()), (Startup::Home, "Desktop".into())];
             for l in layouts {
                 opts.push((Startup::Layout(l.clone()), format!("Layout: {l}")));
             }
@@ -3658,7 +3676,7 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
             });
             let foot = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 22.0), inner.max);
             hint_row(ui, foot, &[("↑↓", "options"), ("Ctrl PgUp PgDn", "sections"), ("Enter", "toggle"), ("Esc", "close")], &pal);
-            let body = Rect::from_min_max(pos2(inner.left(), head.min_rect().bottom().round() + 2.0), pos2(inner.right(), foot.top() - 6.0));
+            let body = Rect::from_min_max(pos2(inner.left(), head.min_rect().bottom().round() + 4.0), pos2(inner.right(), foot.top() - 6.0));
             // A narrow window keeps only the sections' glyphs.
             let narrow = inner.width() < 620.0;
             let side = Rect::from_min_max(body.min, pos2(body.left() + if narrow { 36.0 } else { 172.0 }, body.bottom()));
@@ -3929,10 +3947,10 @@ fn boxed_check(ui: &mut Ui, on: bool, label: egui::RichText, what: &'static str,
 
 pub fn checkbox_glyph(p: &egui::Painter, r: Rect, on: bool, pal: &Palette) {
     if on {
-        p.rect_filled(r, CornerRadius::same(3), pal.accent);
-        p.add(egui::Shape::line(vec![r.left_center() + vec2(3.0, 0.0), r.center_bottom() + vec2(-1.0, -3.5), r.right_top() + vec2(-3.0, 3.5)], Stroke::new(1.6, Color32::WHITE)));
+        p.rect_filled(r, CornerRadius::same(4), pal.accent);
+        p.add(egui::Shape::line(vec![r.left_center() + vec2(3.0, 0.0), r.center_bottom() + vec2(-1.0, -3.5), r.right_top() + vec2(-3.0, 3.5)], Stroke::new(1.6, crate::mochi::on_accent(pal))));
     } else {
-        p.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.2, pal.text_dim.gamma_multiply(0.8)), StrokeKind::Inside);
+        p.rect_stroke(r, CornerRadius::same(4), Stroke::new(1.4, pal.text_dim.gamma_multiply(0.8)), StrokeKind::Inside);
     }
 }
 
@@ -4547,6 +4565,30 @@ fn compress(app: &mut App, ctx: &egui::Context, st: &mut CompressState) -> bool 
             }).inner;
             crate::ui::note_control(ui, r.rect, "compress again");
         }
+        // Mochi: cut into parts of a size, for a drive or a mail that takes no more.
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            side(ui, "Parts");
+            let r = toggle(ui, &mut st.parts, &pal);
+            let _ = r;
+            if st.parts {
+                ui.add_space(6.0);
+                let f = ui.add(egui::TextEdit::singleline(&mut st.part_mb).desired_width(64.0));
+                crate::ui::note_control(ui, f.rect, "compress part size");
+                ui.label(egui::RichText::new("MB each").small().color(pal.text_dim));
+                for (l, v) in [("100 MB", "100"), ("1 GB", "1024"), ("4 GB", "4095")] {
+                    if crate::kit::chip(ui, l, st.part_mb.trim() == v, "part size", &pal).clicked() {
+                        st.part_mb = v.into();
+                    }
+                }
+            } else {
+                ui.label(egui::RichText::new("One file").small().color(pal.text_dim));
+            }
+        });
+        if st.parts {
+            let n = st.out().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            ui.label(egui::RichText::new(format!("{n}.001, {n}.002, …")).small().color(pal.text_dim));
+        }
         match &problem {
             // The passwords are said to differ only once the second is being typed.
             Some(why) if !why.is_empty() && (!why.contains("passwords") || !st.again.is_empty()) => {
@@ -4569,7 +4611,8 @@ fn compress(app: &mut App, ctx: &egui::Context, st: &mut CompressState) -> bool 
         let password = (st.lockable() && !st.password.is_empty()).then(|| crate::archive::Secret(std::mem::take(&mut st.password)));
         st.again.clear();
         let out = st.out();
-        app.actions.push(Action::StartJob(crate::ops::OpKind::Compress { srcs: std::mem::take(&mut st.srcs), out, password, level: st.level }));
+        let parts = st.part_bytes();
+        app.actions.push(Action::StartJob(crate::ops::OpKind::Compress { srcs: std::mem::take(&mut st.srcs), out, password, level: st.level, parts }));
         return false;
     }
     !cancel
@@ -4966,7 +5009,7 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
     let groups: Vec<(&str, Vec<ThemeName>)> = [("Dark", false), ("Light", true)]
         .into_iter()
         .filter(|(_, light)| st.filter == 0 || (st.filter == 2) == *light)
-        .map(|(name, light)| (name, ThemeName::ALL.into_iter().filter(|t| t.is_light() == light && matches(*t)).collect::<Vec<_>>()))
+        .map(|(name, light)| (name, crate::mochi::themes_first().into_iter().filter(|t| t.is_light() == light && matches(*t)).collect::<Vec<_>>()))
         .filter(|(_, v)| !v.is_empty())
         .collect();
     let order: Vec<ThemeName> = groups.iter().flat_map(|g| g.1.iter().copied()).collect();
@@ -5011,6 +5054,7 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
     }
     let mut hovered = None;
     let mut syntax = app.cfg.syntax_theme;
+    let mut accent_pick: Option<usize> = None;
     let mut cards = vec![];
     // Options' size: a fixed window that shrinks with a small one.
     let screen = ctx.content_rect();
@@ -5068,6 +5112,29 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
             let lr = fui.label(egui::RichText::new("Code colors follow the theme").size(12.5).color(pal.text));
             if lr.interact(Sense::click()).clicked() {
                 syntax = !syntax;
+            }
+            // Mochi: Catppuccin's 14 accents, for its four flavours.
+            let shown = app.preview_theme.unwrap_or(current);
+            if crate::mochi::is_catppuccin(shown) {
+                fui.add_space(10.0);
+                fui.label(egui::RichText::new("Accent").size(12.5).color(pal.text_dim));
+                fui.spacing_mut().item_spacing.x = 3.0;
+                for (i, name) in crate::mochi::ACCENTS.iter().enumerate() {
+                    if crate::ui::no_room(&fui, 110.0) {
+                        break;
+                    }
+                    let col = crate::mochi::accent_of(shown, i).unwrap_or(pal.accent);
+                    let (r, resp) = fui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                    crate::ui::note_control(&fui, r, "accent swatch");
+                    let on = crate::mochi::accent_index() == i;
+                    fui.painter().circle_filled(r.center(), if resp.hovered() { 8.5 } else { 7.0 }, col);
+                    if on {
+                        fui.painter().circle_stroke(r.center(), 9.5, Stroke::new(1.5, pal.text));
+                    }
+                    if resp.on_hover_text(*name).clicked() {
+                        accent_pick = Some(i);
+                    }
+                }
             }
             fui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let b = primary_button(ui, "Done", true, &pal);
@@ -5187,6 +5254,10 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
     }
     if syntax != app.cfg.syntax_theme {
         app.cfg.syntax_theme = syntax;
+        app.set_config_changed();
+    }
+    if let Some(i) = accent_pick {
+        app.cfg.accent = crate::mochi::ACCENTS[i].into();
         app.set_config_changed();
     }
     // (Not the click that opened it.)
@@ -5462,9 +5533,11 @@ fn conflict(app: &mut App, ctx: &egui::Context, st: &mut ConflictState) -> bool 
         ui.add_space(4.0);
         hints(ui, &keys, &pal);
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            if st.rename.is_none() {
+        // Mochi: the choices on one row, Cancel and Keep both on their own below, so the
+        // wider pill buttons never lie on top of each other.
+        if st.rename.is_none() {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
                 if plain_button(ui, "Replace", &pal).on_hover_text("The one there goes to the trash; Undo brings it back").clicked() {
                     decision = Some(Conflict::Overwrite);
                 }
@@ -5481,7 +5554,10 @@ fn conflict(app: &mut App, ctx: &egui::Context, st: &mut ConflictState) -> bool 
                     st.rename = Some(free(&st.dest));
                     st.focus_name = true;
                 }
-            }
+            });
+            ui.add_space(8.0);
+        }
+        ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 match st.rename.as_ref() {
@@ -6325,6 +6401,15 @@ fn main_menu(app: &mut App, ctx: &egui::Context) -> bool {
     !clicked_outside(ctx, rect)
 }
 
+/// Mochi: commands the ⋮ menu never lists, though a Quick list may name them: they have
+/// their own buttons in the toolbar (sort, split, expand), keys, or were asked to go.
+fn quick_hidden(c: Cmd) -> bool {
+    matches!(c, Cmd::OpenInNewTab | Cmd::ToggleFlatten | Cmd::SplitRight | Cmd::SplitBottom | Cmd::NewTab | Cmd::CloseTab | Cmd::SavedView | Cmd::ClosePanel | Cmd::ToggleInspector | Cmd::ToggleRecents)
+        || matches!(c.info().cat, crate::commands::Cat::Sort | crate::commands::Cat::Group)
+}
+
+/// The ⋮ menu. Mochi: three short groups (the folder's tools, what is shown, the view);
+/// sorting has its own button beside it, grouping is left out.
 fn quick_menu(app: &mut App, ctx: &egui::Context, panel: Option<(u64, Pos2)>) -> bool {
     let pal = app.pal;
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -6339,104 +6424,50 @@ fn quick_menu(app: &mut App, ctx: &egui::Context, panel: Option<(u64, Pos2)>) ->
         }
     };
     let mut run = None;
-    let quick: Vec<Cmd> = app.ud.quick.iter().filter_map(|id| Cmd::from_id(id)).collect();
-    let group = app.panels.get(&app.active).map(|p| p.tab().settings.group).unwrap_or_default();
     let mut view_at = None;
-    let mut shown: Option<(bool, bool)> = None;
-    let (_, rect) = anchored(ctx, "quickmenu", anchor, 280.0, &pal, |ui| {
-        menu_heading(ui, "Quick", &pal);
-        // A command that switches something says whether it is on: a check, and its name
-        // without the "Toggle" the palette needs to find it.
-        for c in &quick {
-            let clicked = match cmd_state(app, *c) {
-                Some(on) => {
-                    let keys: Vec<String> = app.keymap.bindings(*c).iter().take(3).map(commands::binding_to_string).collect();
-                    let keys = (!keys.is_empty()).then(|| keys.join("\t"));
-                    menu_check(ui, cmd_state_label(*c), on, keys.as_deref(), &pal)
+    // The palette's Quick list, less what the toolbar already does (Ctrl+Q's menu).
+    let quick: Vec<Cmd> = if panel.is_some() { vec![] } else { app.ud.quick.iter().filter_map(|id| Cmd::from_id(id)).filter(|c| crate::mochi::COMMANDS.contains(c) && !quick_hidden(*c)).collect() };
+    let check = |ui: &mut Ui, app: &App, c: Cmd, label: &str| -> bool {
+        let keys: Vec<String> = app.keymap.bindings(c).iter().take(2).map(commands::binding_to_string).collect();
+        let keys = (!keys.is_empty()).then(|| keys.join("\t"));
+        menu_check(ui, label, cmd_state(app, c).unwrap_or(false), keys.as_deref(), &app.pal)
+    };
+    let (_, rect) = anchored(ctx, "quickmenu", anchor, 300.0, &pal, |ui| {
+        if !quick.is_empty() {
+            menu_heading(ui, "Quick", &pal);
+            for c in &quick {
+                let clicked = match cmd_state(app, *c) {
+                    Some(_) => check(ui, app, *c, cmd_state_label(*c)),
+                    None => cmd_item(ui, app, *c),
+                };
+                if clicked {
+                    run = Some(*c);
                 }
-                None => cmd_item(ui, app, *c),
-            };
-            if clicked {
-                run = Some(*c);
+            }
+            menu_sep(ui, &pal);
+        }
+        menu_heading(ui, "Folder", &pal);
+        for c in [Cmd::Refresh, Cmd::FindDuplicates, Cmd::TidyFolder, Cmd::SpaceUsed] {
+            if applicable(app, c) && cmd_item(ui, app, c) {
+                run = Some(c);
             }
         }
-        if panel.is_some() {
-            let (sort, desc, flat, contents, folders, files) = app.panels.get(&app.active).map(|p| {
-                let t = p.tab();
-                (t.settings.sort, t.settings.desc, t.flatten || t.expand_all_on, t.content.on, t.settings.show_folders, t.settings.show_files)
-            }).unwrap_or((crate::config::SortKey::Name, false, false, false, true, true));
-            menu_sep(ui, &pal);
-            menu_heading(ui, "Sort", &pal);
-            // What it is sorted by, as a sliding choice; the direction as one pill beside it
-            // (choosing the key again reverses it, as its command does); then folders first.
-            let keys = [(Cmd::SortName, crate::config::SortKey::Name, "Name"), (Cmd::SortSize, crate::config::SortKey::Size, "Size"), (Cmd::SortModified, crate::config::SortKey::Modified, "Modified"), (Cmd::SortType, crate::config::SortKey::Type, "Type")];
-            let cur = keys.iter().position(|k| k.1 == sort).unwrap_or(keys.len());
-            ui.horizontal(|ui| {
-                ui.add_space(6.0);
-                let labels: Vec<&str> = keys.iter().map(|k| k.2).collect();
-                if let Some(k) = crate::kit::segmented(ui, Id::new("panel menu sort"), &labels, &["sort name", "sort size", "sort modified", "sort type"], &[], cur, MENU_FONT, crate::kit::CHIP_H, &pal) {
-                    run = Some(keys[k].0);
-                }
-                if let Some(k) = keys.get(cur) {
-                    let tip = if desc { "Descending: click for ascending" } else { "Ascending: click for descending" };
-                    let r = crate::kit::bar_item_row(ui, "sort direction", tip, true, &pal, |p, r, c| paint_glyph(p, r, if desc { Glyph::Down } else { Glyph::Up }, c));
-                    if r.clicked() {
-                        run = Some(k.0);
-                    }
-                }
-            });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.add_space(6.0);
-                if crate::kit::chip(ui, "Folders first", app.cfg.folders_first, "folders first", &pal).clicked() {
-                    run = Some(Cmd::ToggleFoldersFirst);
-                }
-            });
-            menu_sep(ui, &pal);
-            menu_heading(ui, "Group", &pal);
-            for c in crate::commands::GROUP_CMDS {
-                if !applicable(app, c) {
-                    continue;
-                }
-                let g = c.group_key().unwrap_or_default();
-                let label = if c == Cmd::GroupNone { "None" } else { c.info().title.trim_start_matches("Group By ") };
-                if menu_check(ui, label, g == group, None, &pal) {
-                    run = Some(c);
-                }
+        menu_sep(ui, &pal);
+        menu_heading(ui, "Show", &pal);
+        for (c, label) in [(Cmd::ToggleHidden, "Hidden files"), (Cmd::ToggleExtensions, "File extensions"), (Cmd::ToggleSystem, "System files")] {
+            if check(ui, app, c, label) {
+                run = Some(c);
             }
-            // What the status bar used to switch: the view and its size, and whether
-            // folders and files are listed at all, each showing whether it is on.
-            menu_sep(ui, &pal);
-            menu_heading(ui, "View", &pal);
-            if menu_item(ui, "View and size…", Some("Ctrl+wheel".into()), &pal) {
-                if let Some((p, a)) = panel {
-                    view_at = Some((p, a));
-                }
-            }
-            ui.add_space(2.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(6.0);
-                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                if crate::kit::chip(ui, "Folders", folders, "show folders", &pal).on_hover_text(if folders { "Hide folders" } else { "Show folders" }).clicked() {
-                    shown = Some((true, false));
-                }
-                if crate::kit::chip(ui, "Files", files, "show files", &pal).on_hover_text(if files { "Hide files" } else { "Show files" }).clicked() {
-                    shown = Some((false, true));
-                }
-                if crate::kit::chip(ui, "Flatten", flat, "flatten", &pal).on_hover_text(Cmd::ToggleFlatten.info().title).clicked() {
-                    run = Some(Cmd::ToggleFlatten);
-                }
-                if crate::kit::chip(ui, "Search contents", contents, "search contents", &pal).on_hover_text(Cmd::ContentSearch.info().title).clicked() {
-                    run = Some(Cmd::ContentSearch);
-                }
-            });
-            ui.add_space(4.0);
-            menu_sep(ui, &pal);
-            for c in [Cmd::SavedView, Cmd::ToggleInspector, Cmd::ClosePanel] {
-                if cmd_item(ui, app, c) {
-                    run = Some(c);
-                }
-            }
+        }
+        menu_sep(ui, &pal);
+        menu_heading(ui, "View", &pal);
+        if check(ui, app, Cmd::ToggleInspector, "Preview pane") {
+            run = Some(Cmd::ToggleInspector);
+        }
+        if menu_item(ui, "View and size…", Some("Ctrl+wheel".into()), &pal) {
+            let p = panel.map_or(app.active, |(p, _)| p);
+            let a = panel.map_or(anchor, |(_, a)| a);
+            view_at = Some((p, a));
         }
     });
     if let Some(c) = run {
@@ -6446,22 +6477,81 @@ fn quick_menu(app: &mut App, ctx: &egui::Context, panel: Option<(u64, Pos2)>) ->
     if let Some((p, a)) = view_at {
         // The view chooser hangs from its lower edge (it opened above the status bar):
         // from the toolbar its lower edge goes about its own height below the button.
-        app.popup = Popup::zoom(p, pos2(a.x + 30.0, a.y + 300.0));
+        app.popup = Popup::zoom(p, pos2(a.x - 200.0, a.y + 300.0));
         return false;
     }
-    if let Some((folders, files)) = shown {
-        if let Some(t) = app.panels.get_mut(&app.active).map(|p| p.tab_mut()) {
-            if folders {
-                t.settings.show_folders = !t.settings.show_folders;
+    !clicked_outside(ctx, rect)
+}
+
+/// Mochi: the sort button's menu: what to sort by, which way, folders first.
+fn sort_menu(app: &mut App, ctx: &egui::Context, panel: u64, anchor: Pos2) -> bool {
+    use crate::config::SortKey as K;
+    let pal = app.pal;
+    if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        return false;
+    }
+    let (sort, desc) = app.panels.get(&panel).map(|p| (p.tab().settings.sort, p.tab().settings.desc)).unwrap_or((K::Name, false));
+    let mut set: Option<K> = None;
+    let mut dir: Option<bool> = None;
+    let mut folders_first = false;
+    let (_, rect) = anchored(ctx, "sortmenu", pos2(anchor.x - 230.0, anchor.y + 4.0), 260.0, &pal, |ui| {
+        menu_heading(ui, "Sort by", &pal);
+        for (k, label) in sort_keys() {
+            if menu_check(ui, label, sort == k, None, &pal) {
+                set = Some(k);
             }
-            if files {
-                t.settings.show_files = !t.settings.show_files;
+        }
+        menu_sep(ui, &pal);
+        menu_heading(ui, "Order", &pal);
+        let (a, d) = sort_dir_labels(sort);
+        if menu_check(ui, a, !desc, None, &pal) {
+            dir = Some(false);
+        }
+        if menu_check(ui, d, desc, None, &pal) {
+            dir = Some(true);
+        }
+        menu_sep(ui, &pal);
+        if menu_check(ui, "Folders first", app.cfg.folders_first, None, &pal) {
+            folders_first = true;
+        }
+    });
+    if set.is_some() || dir.is_some() || folders_first {
+        if folders_first {
+            app.actions.push(Action::Cmd(Cmd::ToggleFoldersFirst));
+        }
+        if let Some(t) = app.panels.get_mut(&panel).map(|p| p.tab_mut()) {
+            if let Some(k) = set {
+                if t.settings.sort != k {
+                    t.settings.sort = k;
+                    t.settings.desc = k.default_desc();
+                }
+            }
+            if let Some(d) = dir {
+                t.settings.desc = d;
             }
             t.dirty = true;
+            t.scroll_to_cursor = true;
         }
         return false;
     }
     !clicked_outside(ctx, rect)
+}
+
+/// The keys the sort button offers, as its menu names them.
+pub(crate) fn sort_keys() -> [(crate::config::SortKey, &'static str); 5] {
+    use crate::config::SortKey as K;
+    [(K::Name, "Name"), (K::Size, "Size"), (K::Modified, "Date modified"), (K::Created, "Date created"), (K::Type, "Type")]
+}
+
+/// Ascending and descending, in the words that suit what is sorted.
+pub(crate) fn sort_dir_labels(k: crate::config::SortKey) -> (&'static str, &'static str) {
+    use crate::config::SortKey as K;
+    match k {
+        K::Name | K::Type => ("Ascending (A to Z)", "Descending (Z to A)"),
+        K::Size => ("Ascending (smallest first)", "Descending (largest first)"),
+        K::Modified | K::Created | K::Accessed | K::Deleted | K::Taken => ("Ascending (oldest first)", "Descending (newest first)"),
+        _ => ("Ascending", "Descending"),
+    }
 }
 
 fn path_menu(app: &mut App, ctx: &egui::Context, panel: u64, path: &Path, anchor: Pos2) -> bool {
@@ -6805,10 +6895,11 @@ fn about(app: &mut App, ctx: &egui::Context) -> bool {
     let (_, rect) = centered(ctx, "about", 380.0, &pal, |ui| {
         ui.vertical_centered(|ui| {
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Maia").size(24.0).strong());
-            ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(pal.text_dim));
+            ui.label(egui::RichText::new(crate::mochi::NAME).size(24.0).strong());
+            ui.label(egui::RichText::new(format!("Version {} · Maia {}", env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_VERSION"))).color(pal.text_dim));
             ui.add_space(6.0);
-            ui.label("A fast, keyboard-first file manager for Linux.");
+            ui.label("Maia, the fast keyboard-first file manager, redesigned in Catppuccin.");
+            ui.label(egui::RichText::new("Maia by yappologistic · GPL-3.0-or-later").small().color(pal.text_dim));
             ui.label(egui::RichText::new("Single binary · Rust + egui").small().color(pal.text_dim));
             ui.add_space(6.0);
         });

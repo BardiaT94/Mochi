@@ -33,8 +33,9 @@ impl Panel {
             id,
             tabs: vec![tab],
             active: 0,
-            inspector: None,
-            inspector_ratio: 0.42,
+            // Mochi: the preview is open from the start.
+            inspector: Some(Default::default()),
+            inspector_ratio: 0.18,
             focus_filter: false,
             filter_has_focus: false,
             rect: Rect::NOTHING,

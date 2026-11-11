@@ -1137,7 +1137,7 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
         }
     }
     let Some(ins) = panel.inspector.as_mut() else { return };
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, pal.bg);
+    crate::mochi::well(ui.painter(), rect, &pal);
     // A crop belongs to the picture it was started on.
     if ins.crop.as_ref().is_some_and(|c| target.as_ref().map(|e| &e.path) != Some(&c.path)) {
         ins.crop = None;
@@ -1912,7 +1912,7 @@ fn edit_view(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     let id = env.panel_id;
     let Some(ins) = panel.inspector.as_mut() else { return };
     let Some(ed) = ins.edit.as_mut() else { return };
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, pal.bg);
+    crate::mochi::well(ui.painter(), rect, &pal);
     let hdr = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 30.0));
     ui.painter().line_segment([hdr.left_bottom(), hdr.right_bottom()], Stroke::new(1.0, pal.border));
     let mut hui = ui.new_child(UiBuilder::new().max_rect(hdr.shrink2(vec2(6.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));

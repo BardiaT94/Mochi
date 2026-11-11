@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::fm1::{Bus, Msg, build, read};
 
-pub const NAME: &str = "org.freedesktop.impl.portal.desktop.maia";
+pub const NAME: &str = "org.freedesktop.impl.portal.desktop.mochi";
 const PATH: &str = "/org/freedesktop/portal/desktop";
 pub const IFACE: &str = "org.freedesktop.impl.portal.FileChooser";
 const REQUEST: &str = "org.freedesktop.impl.portal.Request";
@@ -691,11 +691,12 @@ fn lock(o: &Mutex<Out>) -> std::sync::MutexGuard<'_, Out> {
 /// Answer calls on `bus` until it closes. Each request runs on a thread of its own and
 /// is answered when its picker ends; Close on a request's handle ends that picker.
 pub fn serve(bus: Bus, run: Arc<Run>) {
-    let (mut rd, serial) = bus.into_parts();
+    let (mut rd, serial, early) = bus.into_parts();
+    let mut early = early.into_iter();
     let Ok(w) = rd.try_clone() else { return };
     let out = Arc::new(Mutex::new(Out { s: w, serial: serial.max(1 << 16) }));
     let open: Arc<Mutex<HashMap<String, Arc<Stop>>>> = Default::default();
-    while let Some(m) = read(&mut rd) {
+    while let Some(m) = early.next().or_else(|| read(&mut rd)) {
         if m.kind != 1 {
             continue;
         }
@@ -767,8 +768,9 @@ pub fn run_window(p: &Pick, stop: &Stop) -> Answer {
     if let Some(mut o) = child.stdout.take() {
         let _ = o.read_to_end(&mut said);
     }
-    let _ = child.wait();
+    // The answer is in once the pipe closes; the window may take a while yet to shut down.
     stop.pid.store(0, Ordering::Relaxed);
+    std::thread::spawn(move || child.wait());
     Answer::decode(&said)
 }
 
@@ -835,7 +837,7 @@ impl Places {
     }
 
     pub fn portal_file(&self) -> PathBuf {
-        self.data.join("xdg-desktop-portal/portals/maia.portal")
+        self.data.join("xdg-desktop-portal/portals/mochi.portal")
     }
 
     pub fn service_file(&self) -> PathBuf {
@@ -855,7 +857,7 @@ impl Places {
     }
 }
 
-pub const PORTAL_FILE: &str = "[portal]\nDBusName=org.freedesktop.impl.portal.desktop.maia\nInterfaces=org.freedesktop.impl.portal.FileChooser;\n";
+pub const PORTAL_FILE: &str = "[portal]\nDBusName=org.freedesktop.impl.portal.desktop.mochi\nInterfaces=org.freedesktop.impl.portal.FileChooser;\n";
 
 pub fn service_text(exe: &Path) -> String {
     format!("[D-BUS Service]\nName={NAME}\nExec={} --portal\n", exe.display())
@@ -951,9 +953,9 @@ pub fn turn_on(pl: &Places, exe: &Path) -> std::io::Result<()> {
         None => Some(pl.system.iter().find_map(|d| pl.conf_in(d)).and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default()),
     };
     let text = had.clone().or(made.clone()).unwrap_or_default();
-    let (new, value) = conf_set(&text, IFACE, Some("maia"));
+    let (new, value) = conf_set(&text, IFACE, Some("mochi"));
     if before.is_none() || before.as_ref().is_some_and(|b| b.file != file) {
-        let b = Before { file: file.clone(), made, value: value.filter(|v| v != "maia") };
+        let b = Before { file: file.clone(), made, value: value.filter(|v| v != "mochi") };
         if let Some(d) = pl.state.parent() {
             std::fs::create_dir_all(d)?;
         }
@@ -968,7 +970,7 @@ pub fn turn_off(pl: &Places) -> std::io::Result<()> {
         if let Ok(text) = std::fs::read_to_string(&b.file) {
             let (back, _) = conf_set(&text, IFACE, b.value.as_deref());
             // A file Maia made and nobody has changed since: gone again.
-            let unchanged = b.made.as_ref().is_some_and(|m| conf_set(m, IFACE, Some("maia")).0 == text);
+            let unchanged = b.made.as_ref().is_some_and(|m| conf_set(m, IFACE, Some("mochi")).0 == text);
             if unchanged {
                 std::fs::remove_file(&b.file)?;
             } else {
@@ -978,7 +980,7 @@ pub fn turn_off(pl: &Places) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&pl.state);
     }
     for p in [pl.portal_file(), pl.service_file()] {
-        if std::fs::read_to_string(&p).is_ok_and(|t| t.contains("maia")) {
+        if std::fs::read_to_string(&p).is_ok_and(|t| t.contains("mochi")) {
             std::fs::remove_file(&p)?;
         }
     }
@@ -990,7 +992,7 @@ pub fn is_on(pl: &Places) -> bool {
     let file = std::fs::read(&pl.state).ok().and_then(|b| serde_json::from_slice::<Before>(&b).ok()).map(|b| b.file).unwrap_or_else(|| pl.user_conf());
     let Ok(text) = std::fs::read_to_string(file) else { return false };
     let (_, v) = conf_set(&text, IFACE, None);
-    v.is_some_and(|v| v.split(';').next().map(str::trim) == Some("maia"))
+    v.is_some_and(|v| v.split(';').next().map(str::trim) == Some("mochi"))
 }
 
 /// An xdg-desktop-portal version ("xdg-desktop-portal 1.18.4") as numbers.
@@ -1005,7 +1007,7 @@ pub fn version_of(text: &str) -> Option<(u32, u32, u32)> {
 pub fn missing(version: Option<(u32, u32, u32)>, system_file: bool) -> Option<&'static str> {
     match version {
         None => Some("Needs xdg-desktop-portal, which isn't installed."),
-        Some(v) if v < (1, 20, 1) && !system_file => Some("This xdg-desktop-portal only reads /usr/share: install Maia's package."),
+        Some(v) if v < (1, 20, 1) && !system_file => Some("This xdg-desktop-portal only reads /usr/share: install Mochi."),
         _ => None,
     }
 }
@@ -1019,7 +1021,7 @@ fn portal_version() -> Option<(u32, u32, u32)> {
 }
 
 /// Where a package puts the portal file, read by every version.
-const SYSTEM_PORTAL: &str = "/usr/share/xdg-desktop-portal/portals/maia.portal";
+const SYSTEM_PORTAL: &str = "/usr/share/xdg-desktop-portal/portals/mochi.portal";
 
 /// For the Options row: on or off, and what is missing when it can't work here.
 pub fn state() -> (bool, Option<&'static str>) {
@@ -1042,9 +1044,9 @@ pub fn set(on: bool) -> Result<String, String> {
         return Ok(m.into());
     }
     Ok(match (on, restarted) {
-        (true, true) => "Apps that use the portal now open and save files with Maia".into(),
+        (true, true) => "Apps that use the portal now open and save files with Mochi".into(),
         (false, true) => "Apps open and save files with the desktop's dialog again".into(),
-        (true, false) => "Apps open and save files with Maia once xdg-desktop-portal restarts (or after logging in again)".into(),
+        (true, false) => "Apps open and save files with Mochi once xdg-desktop-portal restarts (or after logging in again)".into(),
         (false, false) => "Apps go back to the desktop's dialog once xdg-desktop-portal restarts (or after logging in again)".into(),
     })
 }
@@ -1082,7 +1084,7 @@ fn reload() -> bool {
 pub fn refresh() {
     let pl = Places::user();
     let p = pl.service_file();
-    if std::fs::read_to_string(&p).is_ok_and(|t| t.contains("maia")) {
+    if std::fs::read_to_string(&p).is_ok_and(|t| t.contains("mochi")) {
         let want = service_text(&crate::fm1::exe());
         if std::fs::read_to_string(&p).ok().as_deref() != Some(want.as_str()) {
             let _ = std::fs::write(&p, want);

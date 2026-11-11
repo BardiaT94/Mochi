@@ -785,6 +785,7 @@ pub fn palette(t: ThemeName) -> Palette {
         _ => {}
     }
     p.syntax = Syntax::of(t);
+    crate::mochi::restyle(t, &mut p);
     p
 }
 
@@ -3369,14 +3370,17 @@ pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, ani
     v.selection.bg_fill = p.selected;
     v.selection.stroke = Stroke::new(1.0, p.accent);
     v.window_stroke = Stroke::new(1.0, p.border);
-    v.window_corner_radius = CornerRadius::same(10);
-    v.menu_corner_radius = CornerRadius::same(8);
-    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
-        w.corner_radius = CornerRadius::same(6);
+    // Mochi: large-radius dialogs and menus, pill-shaped buttons and fields.
+    v.window_corner_radius = CornerRadius::same(crate::mochi::POPUP_R);
+    v.menu_corner_radius = CornerRadius::same(crate::mochi::INNER_R);
+    for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+        w.corner_radius = CornerRadius::same(crate::mochi::INNER_R);
     }
+    v.popup_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if p.dark { 110 } else { 40 }) };
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
     v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
-    v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    // Tonal buttons: a soft container rather than bare text.
+    v.widgets.inactive.weak_bg_fill = crate::mochi::mix(p.raised, p.hover, 0.5);
     // Slider rails, checkboxes and text fields sit on raised popups; keep them darker.
     v.widgets.inactive.bg_fill = p.bg;
     v.slider_trailing_fill = true;
@@ -3406,7 +3410,7 @@ pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, ani
         // Whole points: a fractional gap (9.6 at Spacing 1.6) puts every widget after it
         // between pixels, softening edges.
         s.spacing.item_spacing = vec2((6.0 * spacing).round(), (4.0 * spacing).round());
-        s.spacing.button_padding = vec2((8.0 * spacing).round(), (3.0 * spacing).round());
+        s.spacing.button_padding = vec2((12.0 * spacing).round(), (3.0 * spacing).round());
         s.spacing.interact_size.y = (20.0 * spacing).round();
         s.animation_time = if animations { 0.12 } else { 0.0 };
         s.interaction.selectable_labels = false;
@@ -3537,6 +3541,11 @@ pub fn install_fonts(ctx: &egui::Context, family: &str, mono_family: &str) {
     if let Some(b) = sys_mono {
         add(&mut fonts, "mono", b, &mut mono);
         prop.push("mono".into()); // box-drawing and arrows for proportional text too
+    }
+    // Mochi: Persian and Arabic names in Digi Hamishe, behind the UI and monospace fonts.
+    if let Some(b) = crate::mochi::persian_font().and_then(|p| map_font(&p)) {
+        add(&mut fonts, "persian", b, &mut prop);
+        mono.push("persian".into());
     }
     // Shell prompts and system summaries draw icons from the Nerd Fonts' private-use
     // range, which no ordinary font fills: a Nerd Font on the system does, in the terminal.

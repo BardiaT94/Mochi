@@ -180,11 +180,8 @@ fn eval(n: &Node, e: &Entry, cx: &Cx, ranked: bool) -> R {
         Node::Words(q) => match cx.text {
             Text::Off => R::Yes(0),
             Text::Name => fuzzy::score(q, e.lname()).map_or(R::No, R::Yes),
-            Text::Full => {
-                let name = fuzzy::score(q, e.lname()).map(|s| s + 40);
-                let path = e.rel().as_ref().and_then(|r| fuzzy::score_ci(q, r));
-                name.max(path).map_or(R::No, R::Yes)
-            }
+            // Mochi: the words whole in the name, or in a folder above it, before close typos.
+            Text::Full => crate::mochi::search_score(q, e).map_or(R::No, R::Yes),
         },
         Node::Has(s, text) => match cx.text {
             Text::Off if *text => R::Yes(0),
@@ -264,7 +261,7 @@ thread_local! {
 
 /// Whether `hay` holds `needle` (already lowercase), in any case, without allocating
 /// for plain ASCII.
-fn contains_ci(hay: &str, needle: &str) -> bool {
+pub(crate) fn contains_ci(hay: &str, needle: &str) -> bool {
     if hay.is_ascii() {
         let (h, n) = (hay.as_bytes(), needle.as_bytes());
         n.is_empty() || h.len() >= n.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))

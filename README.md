@@ -75,7 +75,7 @@ with:
 | Go to a place or path | Ctrl+P, Ctrl+L |
 | A folder you use often, by a few letters | Ctrl+G |
 | New tab, close tab, reopen | Ctrl+T, Ctrl+W, Ctrl+Shift+T |
-| Split right, split below, switch panel | Ctrl+Shift+S, Ctrl+S, Tab |
+| Split right, split below, switch panel | Ctrl+S, Ctrl+Shift+S, Tab |
 | Preview, pictures full window, on a calendar | Space, F3, Shift+F3 |
 | Find in the preview, edit it there | Ctrl+F, Shift+F4 |
 | Terminal under the files | Ctrl+` |

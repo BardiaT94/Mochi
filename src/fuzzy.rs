@@ -6,11 +6,17 @@
 /// Prepared lowercase query.
 pub struct Query {
     chars: Vec<char>,
+    /// Mochi: the same, as text, for `mochi::search_score`.
+    text: String,
 }
 
 impl Query {
     pub fn new(q: &str) -> Query {
-        Query { chars: q.trim().to_lowercase().chars().filter(|c| !c.is_whitespace()).collect() }
+        let chars: Vec<char> = q.trim().to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+        Query { text: chars.iter().collect(), chars }
+    }
+    pub fn text(&self) -> &str {
+        &self.text
     }
     pub fn is_empty(&self) -> bool {
         self.chars.is_empty()

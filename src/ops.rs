@@ -37,7 +37,8 @@ pub enum OpKind {
     Extract { archive: PathBuf, members: Vec<PathBuf>, dest: PathBuf },
     /// `srcs` packed into the archive `out` at `level`, locked with a password when there
     /// is one.
-    Compress { srcs: Vec<PathBuf>, out: PathBuf, password: Option<crate::archive::Secret>, level: crate::archwrite::Level },
+    /// Mochi: `parts`, the archive cut into parts of that many bytes (out.001, out.002, …).
+    Compress { srcs: Vec<PathBuf>, out: PathBuf, password: Option<crate::archive::Secret>, level: crate::archwrite::Level, parts: Option<u64> },
     /// A change inside `archive`, made beside it and swapped in once whole (the old one
     /// to the trash).
     ArchiveEdit { archive: PathBuf, edit: crate::archwrite::Edit },
@@ -487,13 +488,19 @@ fn run(kind: &OpKind, p: &Mutex<Progress>, cancel: &Gate, ctx: &egui::Context) {
             p.lock().unwrap().current = name_of(archive);
             extract(archive, members, dest, p, cancel, ctx);
         }
-        OpKind::Compress { srcs, out, password, level } => {
+        OpKind::Compress { srcs, out, password, level, parts } => {
             p.lock().unwrap().total_items = srcs.len();
             p.lock().unwrap().current = name_of(out);
-            match crate::archwrite::compress(out, srcs, *level, password.as_ref().map(|pw| pw.0.as_str()), p, cancel, ctx) {
-                Ok(()) => {
+            match crate::archwrite::compress(out, srcs, *level, password.as_ref().map(|pw| pw.0.as_str()), p, cancel, ctx).and_then(|()| match parts {
+                Some(size) => split_parts(out, *size, cancel).map(Some),
+                None => Ok(None),
+            }) {
+                Ok(made) => {
                     let mut g = p.lock().unwrap();
-                    g.produced.push((out.clone(), out.clone()));
+                    match made {
+                        Some(made) => g.produced.extend(made.into_iter().map(|m| (m.clone(), m))),
+                        None => g.produced.push((out.clone(), out.clone())),
+                    }
                     g.done_items = srcs.len();
                 }
                 Err(_) if cancel.cancelled() => {}
@@ -1126,6 +1133,7 @@ fn copy_data(r: &fs::File, w: &fs::File, len: u64, p: &Mutex<Progress>, cancel: 
         }
     };
     let (mut kernel, mut done) = (hash.is_none(), 0u64);
+    let (mut started, mut flushed) = (0u64, 0u64);
     let mut buf = if kernel { vec![] } else { vec![0u8; len.clamp(64 << 10, 1 << 20) as usize] };
     loop {
         if cancel.stop() {
@@ -1154,11 +1162,51 @@ fn copy_data(r: &fs::File, w: &fs::File, len: u64, p: &Mutex<Progress>, cancel: 
             n
         };
         if n == 0 {
+            // Mochi: what is still only in memory counts towards the next flush.
+            settle_tail(wf, done - flushed);
             return Ok(hash.map(|h| h.finish()));
         }
         done += n as u64;
+        // Mochi: the copy keeps pace with the drive, not with memory. Each window written
+        // is handed to the drive, and the one before it waited for: on a slow drive the
+        // bytes counted are bytes on it, so the bar moves as the copy does (else it was
+        // full at once, and the job then sat waiting on the kernel's flush).
+        if done - started >= FLUSH_WINDOW {
+            unsafe {
+                libc::sync_file_range(wf, started as i64, (done - started) as i64, libc::SYNC_FILE_RANGE_WRITE);
+                if started > flushed {
+                    libc::sync_file_range(wf, flushed as i64, (started - flushed) as i64, libc::SYNC_FILE_RANGE_WAIT_BEFORE | libc::SYNC_FILE_RANGE_WRITE | libc::SYNC_FILE_RANGE_WAIT_AFTER);
+                    libc::posix_fadvise(wf, flushed as i64, (started - flushed) as i64, libc::POSIX_FADV_DONTNEED);
+                    flushed = started;
+                }
+            }
+            started = done;
+        }
         step(n as u64);
     }
+}
+
+/// Mochi: how far ahead of the drive a copy may write (see `copy_data`).
+const FLUSH_WINDOW: u64 = 16 << 20;
+
+thread_local! {
+    /// Bytes this job's thread wrote that may still be only in memory: many small files
+    /// add up, and are flushed together once they pass a few windows.
+    static UNFLUSHED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A file's last bytes, not yet waited for: counted, and the destination's file system
+/// flushed once enough has gathered.
+fn settle_tail(wf: i32, bytes: u64) {
+    UNFLUSHED.with(|u| {
+        let n = u.get() + bytes;
+        if n >= 4 * FLUSH_WINDOW {
+            unsafe { libc::syncfs(wf) };
+            u.set(0);
+        } else {
+            u.set(n);
+        }
+    });
 }
 
 /// Extended attributes (Maia's tags among them) copied over; those the target can't keep
@@ -1535,4 +1583,67 @@ fn disk_name(sys: &Path, dev: &Path) -> Option<String> {
         d = d.parent()?.to_path_buf();
     }
     Some(d.file_name()?.to_string_lossy().into_owned())
+}
+
+/// Mochi: cut the archive `out` into parts of `size` bytes, `out.001`, `out.002`, … (as
+/// 7-Zip's volumes are: the archive's bytes in order, so 7-Zip opens the first and `cat`
+/// joins them), then remove `out`. Gives the parts made.
+fn split_parts(out: &Path, size: u64, cancel: &Gate) -> Result<Vec<PathBuf>, String> {
+    use std::io::{Read, Write};
+    let size = size.max(1 << 20);
+    let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut src = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(out).map_err(|e| e.to_string())?);
+    let mut made = vec![];
+    let mut buf = vec![0u8; 1 << 20];
+    let fail = |made: &[PathBuf], e: String| {
+        for m in made {
+            let _ = std::fs::remove_file(m);
+        }
+        Err(e)
+    };
+    loop {
+        let part = out.with_file_name(format!("{name}.{:03}", made.len() + 1));
+        let mut left = size;
+        let mut dst: Option<std::io::BufWriter<std::fs::File>> = None;
+        while left > 0 {
+            if cancel.cancelled() {
+                made.push(part);
+                return fail(&made, "cancelled".into());
+            }
+            let want = (buf.len() as u64).min(left) as usize;
+            let n = match src.read(&mut buf[..want]) {
+                Ok(n) => n,
+                Err(e) => return fail(&made, e.to_string()),
+            };
+            if n == 0 {
+                break;
+            }
+            if dst.is_none() {
+                match std::fs::File::create_new(&part) {
+                    Ok(f) => {
+                        made.push(part.clone());
+                        dst = Some(std::io::BufWriter::new(f));
+                    }
+                    Err(e) => return fail(&made, format!("{}: {e}", part.display())),
+                }
+            }
+            if let Err(e) = dst.as_mut().unwrap().write_all(&buf[..n]) {
+                return fail(&made, e.to_string());
+            }
+            left -= n as u64;
+        }
+        match dst {
+            Some(mut d) => {
+                if let Err(e) = d.flush() {
+                    return fail(&made, e.to_string());
+                }
+            }
+            None => break,
+        }
+        if left > 0 {
+            break;
+        }
+    }
+    let _ = std::fs::remove_file(out);
+    Ok(made)
 }

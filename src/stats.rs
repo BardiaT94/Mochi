@@ -97,6 +97,12 @@ impl Stats {
             cur = c.parent();
         }
     }
+
+    /// Forget stats for `p`, its ancestors and every folder inside it (Refresh).
+    pub fn invalidate_tree(&mut self, p: &Path) {
+        self.map.retain(|k, _| !k.starts_with(p));
+        self.invalidate(p);
+    }
 }
 
 pub(crate) fn compute(root: &Path, gen_: &AtomicU64, g: u64) -> DirStats {

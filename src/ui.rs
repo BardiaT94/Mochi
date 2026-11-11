@@ -13,12 +13,15 @@ use crate::popups::Popup;
 use crate::tab;
 use crate::theme::{Glyph, Palette, paint_glyph};
 
-pub const TITLE_H: f32 = 36.0;
-pub const TAB_H: f32 = 30.0;
+// Mochi: taller bars (title and tabs, path, status).
+pub const TITLE_H: f32 = 48.0;
+pub const TAB_H: f32 = 40.0;
 /// A pinned tab: its icon with room either side.
-const PIN_TAB_W: f32 = 36.0;
-pub const HEADER_H: f32 = 34.0;
-pub const FOOTER_H: f32 = 30.0;
+const PIN_TAB_W: f32 = 40.0;
+/// Mochi: two rows: the tools (with air above them), then the path.
+pub const HEADER_H: f32 = 104.0;
+const HEADER_TOP_H: f32 = 60.0;
+pub const FOOTER_H: f32 = 42.0;
 
 /// A text field drawn without a frame of its own, keeping the padding it had when that
 /// was a switch: 4 by 2.
@@ -122,7 +125,10 @@ pub fn glyph_button(ui: &mut Ui, g: Glyph, tip: &str, enabled: bool, pal: &Palet
 
 /// A toolbar glyph button the simulations find by its own name.
 pub fn glyph_button_as(ui: &mut Ui, g: Glyph, tip: &str, enabled: bool, pal: &Palette, what: &'static str) -> egui::Response {
-    if no_room(ui, 26.0) {
+    // Mochi: round icon buttons, as large as the bar they sit in allows (34 px in the
+    // toolbars, the old 26 in short bars).
+    let s = crate::mochi::button_size(ui);
+    if no_room(ui, s) {
         return ui.allocate_exact_size(Vec2::ZERO, Sense::hover()).1;
     }
     let (rect, resp) = ui.allocate_exact_size(crate::kit::ITEM, if enabled { Sense::click() } else { Sense::hover() });
@@ -438,7 +444,7 @@ impl App {
             egui::Panel::top("title")
                 .exact_size(TITLE_H)
                 .show_separator_line(false)
-                .frame(egui::Frame::NONE.fill(pal.panel))
+                .frame(egui::Frame::NONE.fill(pal.chrome))
                 .show(root, |ui| self.title_bar(ui))
         });
         // ------------------------------------------------ shelf (only while it holds something)
@@ -456,11 +462,14 @@ impl App {
         }
         // ------------------------------------------------ panels
         ctx.root_ui(|root| egui::CentralPanel::default().frame(egui::Frame::NONE.fill(pal.bg)).show(root, |ui| {
+            // Mochi: the panels are cards floating on the backdrop, a gutter from every edge.
+            let g = crate::mochi::GUTTER;
             let full = ui.max_rect();
+            let full = Rect::from_min_max(pos2(full.left() + if self.sidebar { 0.0 } else { g }, full.top()), pos2(full.right() - g, full.bottom() - g));
             let mut leaves = vec![];
             let mut dividers = vec![];
             let panels = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - crate::terminal::room(self, full)));
-            self.tree.layout(panels, 3.0, &mut leaves, &mut dividers, &mut vec![]);
+            self.tree.layout(panels, crate::mochi::GUTTER, &mut leaves, &mut dividers, &mut vec![]);
             // Panels still too small to lay out while they grow in: background only.
             let mut growing = std::collections::HashSet::new();
             // Ease each panel's rectangle toward its layout slot. A new panel grows out of
@@ -518,7 +527,7 @@ impl App {
             }
             for (id, rect) in leaves.clone() {
                 if growing.contains(&id) {
-                    ui.painter().rect_filled(rect, CornerRadius::same(if self.cfg.round_corners { 8 } else { 0 }), pal.panel);
+                    ui.painter().rect_filled(rect, CornerRadius::same(if self.cfg.round_corners { crate::mochi::CARD_R } else { 0 }), pal.panel);
                     continue;
                 }
                 let tabs_in_title = if in_title.is_empty() { id == self.tree.first_leaf() } else { in_title.contains(&id) };
@@ -529,7 +538,9 @@ impl App {
                 let resp = ui.interact(handle, Id::new(("divider", &path)), Sense::click_and_drag());
                 if resp.hovered() || resp.dragged() {
                     ctx.set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
-                    ui.painter().rect_filled(handle.shrink(2.0), CornerRadius::same(1), pal.accent.gamma_multiply(0.6));
+                    // A short grip in the gutter's middle.
+                    let grip = if vertical { Rect::from_center_size(handle.center(), vec2(4.0, 40.0f32.min(handle.height()))) } else { Rect::from_center_size(handle.center(), vec2(40.0f32.min(handle.width()), 4.0)) };
+                    crate::mochi::pill(ui.painter(), grip, pal.accent);
                 }
                 if let Some(node) = self.tree.at_path(&path) {
                     if let crate::panel::Node::Split { ratio, .. } = node {
@@ -593,8 +604,8 @@ impl App {
             let m = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!m));
         }
-        // The tabs sit on the toolbar's own surface; a hairline is all that parts them.
-        ui.painter().line_segment([pos2(rect.left(), rect.bottom() - 0.5), pos2(rect.right(), rect.bottom() - 0.5)], Stroke::new(1.0, pal.border));
+        // Mochi: the tabs float on the backdrop, like the sidebar, so the cards below keep
+        // their rounded corners clear of any edge.
         let mut ui = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(6.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
         // Menu and sidebar toggle live in the sidebar header while it is shown.
         if !self.sidebar {
@@ -618,7 +629,7 @@ impl App {
         // (left/right splits get one strip each); the window buttons stay at the far right.
         // Window buttons (3 × 40), a gap, the tab-list chevron (26) and the spacing between
         // those five items, plus a small margin before the last tab strip.
-        let right_reserved = 3.0 * 40.0 + 4.0 + 26.0 + 4.0 * ui.spacing().item_spacing.x + 6.0;
+        let right_reserved = 3.0 * 40.0 + 4.0 + 34.0 + 4.0 * ui.spacing().item_spacing.x + 6.0;
         let mut tops: Vec<(u64, Rect)> = {
             let mut leaves = vec![];
             self.tree.leaves(&mut leaves);
@@ -641,10 +652,7 @@ impl App {
             if x1 - x0 < 40.0 {
                 continue;
             }
-            if i > 0 {
-                // A faint seam above the divider between the panels.
-                ui.painter().line_segment([pos2(pr.left() - 1.5, rect.top() + 8.0), pos2(pr.left() - 1.5, rect.bottom() - 6.0)], Stroke::new(1.0, pal.border));
-            }
+            let _ = i;
             let sr = Rect::from_min_max(pos2(x0, rect.top()), pos2(x1, rect.bottom()));
             let mut sui = ui.new_child(UiBuilder::new().max_rect(sr).layout(egui::Layout::left_to_right(egui::Align::Center)));
             // Too many tabs for the strip: they clip at its edge instead of running under
@@ -659,12 +667,18 @@ impl App {
                 let (r, resp) = ui.allocate_exact_size(vec2(40.0, TITLE_H), Sense::click());
                 note_control(ui, r, "window button");
                 let hovered = resp.hovered();
-                if hovered {
-                    let (hr, rad) = if self.cfg.rect_buttons { (r, 0) } else { (r.shrink2(vec2(5.0, 5.0)), 6) };
-                    ui.painter().rect_filled(hr, CornerRadius::same(rad), if kind == 2 { Color32::from_rgb(0xc4, 0x2b, 0x1c) } else { pal.hover });
+                // Mochi: round buttons, a soft circle always there, the close one red when hovered.
+                let disc = Rect::from_center_size(r.center(), Vec2::splat(30.0));
+                let fill = if hovered && kind == 2 { pal.danger } else if hovered { pal.hover } else { crate::mochi::mix(pal.chrome, pal.hover, 0.55) };
+                if self.cfg.rect_buttons {
+                    if hovered {
+                        ui.painter().rect_filled(r, CornerRadius::ZERO, fill);
+                    }
+                } else {
+                    crate::mochi::pill(ui.painter(), disc, fill);
                 }
                 let c = r.center();
-                let col = if hovered && kind == 2 { Color32::WHITE } else { pal.text_dim };
+                let col = if hovered && kind == 2 { pal.chrome } else if hovered { pal.text } else { pal.text_dim };
                 let st = Stroke::new(1.2, col);
                 match kind {
                     0 => {
@@ -691,10 +705,10 @@ impl App {
                 }
             }
             ui.add_space(4.0);
-            let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
             note_control(ui, r, "tab list");
             if resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
+                crate::mochi::pill(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(34.0)), pal.hover);
             }
             ui.painter().add(egui::Shape::line(vec![r.center() + vec2(-5.0, -2.0), r.center() + vec2(0.0, 3.0), r.center() + vec2(5.0, -2.0)], Stroke::new(1.5, pal.text_dim)));
             if cmd_tip(resp, None, Cmd::TabSearch, &self.keymap, &pal).clicked() {
@@ -779,10 +793,18 @@ impl App {
             let hovered = resp.hovered();
             // The active tab is a pill raised a step off the surface it shares with the
             // toolbar, not a tab cut from the panel below.
-            let pill = pal.panel.lerp_to_gamma(pal.text, if pal.dark { 0.08 } else { 0.06 });
-            let fill = if is_active { pill } else if hovered { pal.hover } else { Color32::TRANSPARENT };
-            let rad = if self.cfg.round_corners { 7 } else { 0 };
-            ui.painter().rect_filled(r.shrink2(vec2(1.0, 0.0)), CornerRadius::same(rad), fill);
+            // Mochi: every tab is a pill; the active one an accent container, with an
+            // accent ring while its panel has the focus.
+            let fill = if is_active { pal.selected } else if hovered { pal.hover } else { Color32::TRANSPARENT };
+            let pr = r.shrink2(vec2(1.0, 0.0));
+            if self.cfg.round_corners {
+                crate::mochi::pill(ui.painter(), pr, fill);
+                if is_active && active_panel && self.panels.len() > 1 {
+                    ui.painter().rect_stroke(pr, crate::mochi::pill_r(pr), Stroke::new(1.0, pal.accent.gamma_multiply(0.6)), StrokeKind::Inside);
+                }
+            } else {
+                ui.painter().rect_filled(pr, CornerRadius::ZERO, fill);
+            }
             let _ = active_panel;
             // Icon or spinner; a pinned tab is its icon alone.
             let ic = Rect::from_center_size(pos2(if t.pinned { r.center().x } else { r.left() + 15.0 }, r.center().y), Vec2::splat(14.0));
@@ -837,7 +859,7 @@ impl App {
                 let cr = Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), Vec2::splat(16.0));
                 let ch = pointer.map(|pp| cr.contains(pp)).unwrap_or(false);
                 if ch {
-                    ui.painter().rect_filled(cr, CornerRadius::same(4), pal.raised);
+                    crate::mochi::pill(ui.painter(), cr, if is_active { pal.cursor } else { pal.raised });
                 }
                 paint_glyph(ui.painter(), cr.shrink(3.0), Glyph::Close, if ch { pal.text } else { pal.text_dim });
                 if ch && resp.clicked() {
@@ -897,7 +919,7 @@ impl App {
         let (r, resp) = ui.allocate_exact_size(vec2(if room { plus_w } else { 0.0 }, TAB_H - 6.0), Sense::click());
         note_control(ui, r, "new tab");
         if room && resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
+            crate::mochi::pill(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(24.0)), pal.hover);
         }
         if room {
             paint_glyph(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(13.0)), Glyph::Plus, pal.text_dim);
@@ -952,9 +974,9 @@ impl App {
                 }
             }
         }
-        let rad = if self.cfg.round_corners { 8 } else { 0 };
-        // Under the title bar's tabs the panel runs on from it: square top corners.
-        let top = if tabs_in_title { 0 } else { rad };
+        // Mochi: every panel is a card, rounded all round, even under the title bar's tabs.
+        let rad = if self.cfg.round_corners { crate::mochi::CARD_R } else { 0 };
+        let top = rad;
         let corners = CornerRadius { nw: top, ne: top, sw: rad, se: rad };
         ui.painter().rect_filled(rect, corners, pal.panel);
         let mut y = rect.top();
@@ -962,8 +984,7 @@ impl App {
         // drawn over the panel below it.
         if !tabs_in_title && rect.height() >= TAB_H {
             let r = Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), y + TAB_H));
-            ui.painter().line_segment([pos2(r.left(), r.bottom() - 0.5), pos2(r.right(), r.bottom() - 0.5)], Stroke::new(1.0, pal.border));
-            let mut child = ui.new_child(UiBuilder::new().max_rect(r.shrink2(vec2(4.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            let mut child = ui.new_child(UiBuilder::new().max_rect(r.shrink2(vec2(8.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
             self.tab_strip(&mut child, id, r.width() - 8.0);
             y += TAB_H;
         }
@@ -979,9 +1000,12 @@ impl App {
         }
         let footer = Rect::from_min_max(pos2(rect.left(), rect.bottom() - if show_footer { FOOTER_H } else { 0.0 }), rect.max);
         let body = Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), footer.top()));
-        ui.painter().line_segment([body.left_top(), body.right_top()], Stroke::new(1.0, pal.border));
         // Inspector split.
         // The inspector slides open and closed: its share of the body animates.
+        // Mochi: every preview at the width last dragged to, kept in the config.
+        if let Some(p) = self.panels.get_mut(&id) {
+            p.inspector_ratio = self.cfg.preview_ratio.clamp(0.12, 0.85);
+        }
         let insp_t = {
             let p = &self.panels[&id];
             let open = p.inspector.is_some();
@@ -1018,85 +1042,7 @@ impl App {
                 }
             }
         };
-        // The folder's README over the list: its start, or all of it, sliding to its height.
-        let list_rect = {
-            let size = self.cfg.font_size;
-            let (show, hidden) = (self.cfg.show_readme, &self.ud.readme_hidden);
-            let p = self.panels.get_mut(&id).expect("drawn panel");
-            let t = p.tab_mut();
-            let fits = show && !tab::is_place(&t.path) && t.archive.is_none() && !t.flatten && t.smart.is_none() && !t.content.on && t.filter.is_empty() && !t.settings.column_view && !t.settings.stack_view && !hidden.contains(&t.path) && !t.path.starts_with(crate::sidebar::trash_dir());
-            let chosen = self.cfg.readme_height;
-            let room = list_rect.height();
-            let want = if fits {
-                crate::readme::sync(t, ui.ctx());
-                t.readme.as_deref_mut().map_or(0.0, |c| crate::readme::height(c, size, room, chosen))
-            } else {
-                0.0
-            };
-            // Dragged, the card follows the pointer at once; otherwise it slides.
-            let grip_id = Id::new(("readme grip", id));
-            let dragging = ui.ctx().is_being_dragged(grip_id);
-            let h = if self.cfg.animations { ui.ctx().animate_value_with_time(Id::new(("readme h", id)), want, if dragging { 0.0 } else { 0.16 }) } else { want };
-            if h >= 1.0 && fits {
-                let card = Rect::from_min_max(list_rect.min, pos2(list_rect.right(), list_rect.top() + h));
-                let spacing = self.cfg.spacing;
-                let pal = self.pal;
-                let shut = crate::readme::shut_height(size, chosen, room);
-                let act = {
-                    let App { panels, thumbs, .. } = self;
-                    let t = panels.get_mut(&id).expect("drawn panel").tab_mut();
-                    let mut cu = ui.new_child(UiBuilder::new().max_rect(card));
-                    cu.set_clip_rect(card.intersect(ui.clip_rect()));
-                    t.readme.as_deref_mut().and_then(|c| crate::readme::draw(&mut cu, card, c, size, shut, spacing, &pal, thumbs, id))
-                };
-                // Its bottom edge drags to the height wanted, kept for every folder; a
-                // double click gives the start's own height back.
-                let edge = card.bottom() - 6.0;
-                let grip = Rect::from_min_max(pos2(card.left() + 8.0, edge - 3.0), pos2(card.right() - 8.0, card.bottom() + 2.0));
-                let g = ui.interact(grip, grip_id, if crate::readme::settled(h) || dragging { Sense::click_and_drag() } else { Sense::hover() });
-                if crate::readme::settled(h) {
-                    note_control(ui, grip, "readme edge");
-                }
-                if (g.hovered() && crate::readme::settled(h)) || g.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                    let c = pos2(card.center().x, edge);
-                    ui.painter().rect_filled(Rect::from_center_size(c, vec2(36.0, 4.0)), CornerRadius::same(2), if g.dragged() { pal.accent } else { pal.text_dim });
-                }
-                if g.dragged() {
-                    if let Some(pp) = g.interact_pointer_pos() {
-                        let to = (pp.y - card.top() + 6.0).clamp(crate::readme::min_height(size), crate::readme::max_height(room)).round();
-                        if to != self.cfg.readme_height {
-                            self.cfg.readme_height = to;
-                            self.cfg_dirty = true;
-                        }
-                        if let Some(c) = self.panels.get_mut(&id).and_then(|p| p.tab_mut().readme.as_deref_mut()) {
-                            c.open = false;
-                        }
-                    }
-                }
-                if g.double_clicked() {
-                    self.cfg.readme_height = 0.0;
-                    self.cfg_dirty = true;
-                }
-                match act {
-                    Some(crate::readme::Act::Hide(dir)) => {
-                        self.ud.readme_hidden.push(dir);
-                        self.ud_dirty = true;
-                    }
-                    Some(crate::readme::Act::Follow(crate::markdown::Follow::Open(f))) => self.actions.push(Action::OpenFile(f)),
-                    Some(crate::readme::Act::Follow(crate::markdown::Follow::Folder(f))) => self.actions.push(Action::Navigate { panel: id, path: f }),
-                    Some(crate::readme::Act::Follow(crate::markdown::Follow::Url(u))) if crate::markdown::is_web(&u) => {
-                        if let Err(e) = crate::mime::open_uri(&u) {
-                            self.toast(format!("Couldn't open: {e}"));
-                        }
-                    }
-                    _ => {}
-                }
-                Rect::from_min_max(pos2(list_rect.left(), card.bottom()), list_rect.max)
-            } else {
-                list_rect
-            }
-        };
+        // Mochi: no README card over the list.
         let github = self.panels.get(&id).is_some_and(|p| tab::is_github(&p.tab().path));
         if github {
             let App { panels, cfg, actions, github: page, .. } = self;
@@ -1109,6 +1055,7 @@ impl App {
             cu.set_clip_rect(list_rect.intersect(ui.clip_rect()));
             crate::github::page(&mut cu, list_rect, page, cfg, &pal, actions, id);
         }
+        let mut dragged_ratio = None;
         if !github {
             let App { panels, cfg, thumbs, stats, recents_set, pinned_set, actions, keymap, drag, clipboard, ud, avatars, .. } = self;
             let panel = panels.get_mut(&id).unwrap();
@@ -1140,18 +1087,24 @@ impl App {
                 // Divider
                 let handle = if right { Rect::from_center_size(pos2(ir.left() - 1.0, ir.center().y), vec2(6.0, ir.height())) } else { Rect::from_center_size(pos2(ir.center().x, ir.top() - 1.0), vec2(ir.width(), 6.0)) };
                 let resp = ui.interact(handle, Id::new(("insp_div", id)), Sense::drag());
-                ui.painter().line_segment(if right { [ir.left_top(), ir.left_bottom()] } else { [ir.left_top(), ir.right_top()] }, Stroke::new(1.0, pal.border));
                 if resp.hovered() || resp.dragged() {
                     ui.ctx().set_cursor_icon(if right { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
                 }
                 if resp.dragged() {
                     if let Some(pp) = resp.interact_pointer_pos() {
-                        panel.inspector_ratio = if right { (body.right() - pp.x) / body.width() } else { (body.bottom() - pp.y) / body.height() }.clamp(0.15, 0.85);
+                        panel.inspector_ratio = if right { (body.right() - pp.x) / body.width() } else { (body.bottom() - pp.y) / body.height() }.clamp(0.12, 0.85);
+                        dragged_ratio = Some(panel.inspector_ratio);
                     }
                 }
+                // Mochi: the preview is a recessed card inside the panel's.
+                let ir = Rect::from_min_max(ir.min + vec2(if right { 2.0 } else { 6.0 }, if right { 0.0 } else { 2.0 }), ir.max - vec2(6.0, 0.0));
                 panel.inspector_rect = Some(ir);
                 crate::inspector::inspector(ui, ir, panel, &mut env);
             }
+        }
+        if let Some(r) = dragged_ratio {
+            self.cfg.preview_ratio = r;
+            self.cfg_dirty = true;
         }
         if show_footer {
             self.footer_ui(ui, id, footer);
@@ -1164,118 +1117,216 @@ impl App {
         }
     }
 
+    /// Mochi: the panel's header, after dfiles' and Material 3's: one roomy row of tools
+    /// (the way back, a wide search bar with its two switches, the view, split, terminal
+    /// and sort buttons, the ⋮ menu), and under it the path with what the folder holds.
     fn header_ui(&mut self, ui: &mut Ui, id: u64, rect: Rect) {
-        use crate::kit::{CAP_H, INSET, ITEM};
         let pal = self.pal;
-        let round = self.cfg.round_corners;
-        // Three capsules of one height, then the ⋮ menu: the way back and up, the path
-        // with what belongs to the folder (its saved view, its bookmark), and the filter.
-        // The menu keeps its place at the right end whatever the width; everything else
-        // gives way before it (a narrow split ran its buttons into the next panel).
-        let menu_r = Rect::from_center_size(pos2(rect.right() - 6.0 - ITEM.x / 2.0, rect.center().y), ITEM);
-        let left = Rect::from_min_max(pos2(rect.left() + 6.0, rect.top()), pos2((menu_r.left() - 4.0).max(rect.left() + 6.0), rect.bottom()));
-        let outer_clip = rect.intersect(ui.clip_rect());
-        let mut child = ui.new_child(UiBuilder::new().max_rect(left).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        child.set_clip_rect(left.intersect(ui.clip_rect()));
-        let ui = &mut child;
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let (can_back, can_fwd, path, flatten, saved) = {
+        let row1 = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + HEADER_TOP_H));
+        let row2 = Rect::from_min_max(pos2(rect.left(), row1.bottom()), rect.max);
+        // The tools sit low in their row: the air above lets the window breathe.
+        let cy = row1.center().y + 4.0;
+        let b = 38.0;
+        let gap = 6.0;
+        let pad = 12.0;
+        let orig_clip = ui.clip_rect();
+        let outer_clip = rect.intersect(orig_clip);
+        // A search that walked into the subfolders stops with it.
+        if let Some(t) = self.panels.get_mut(&id).map(|p| p.tab_mut()) {
+            if t.auto_flat && (!t.flatten || t.filter.is_empty()) {
+                t.auto_flat = false;
+                if t.flatten && t.smart.is_none() {
+                    t.set_flatten(false);
+                }
+            }
+        }
+        let (can_back, can_fwd, path, flatten, sort, desc, github) = {
             let t = self.panels[&id].tab();
-            (t.can_back() || t.flatten, t.can_forward(), t.path.clone(), t.flatten || t.expand_all_on, t.saved_scope.is_some())
+            (t.can_back() || t.flatten, t.can_forward(), t.path.clone(), t.flatten || t.expand_all_on, t.settings.sort, t.settings.desc, tab::is_github(&t.path))
         };
-        let mut cmd = None;
-        // Back / Forward / Up tooltips name the folder they lead to.
         let (back_to, fwd_to) = {
             let t = self.panels[&id].tab();
             let show = |p: &Path| if tab::is_computer(p) { "Computer".to_string() } else { p.display().to_string() };
             (t.hist_pos.checked_sub(1).and_then(|i| t.history.get(i)).map(|h| show(&h.path)), t.history.get(t.hist_pos + 1).map(|h| show(&h.path)))
         };
         let up_to = if tab::is_computer(&path) { None } else if tab::is_github(&path) { Some("Computer".into()) } else { Some(path.parent().map(|p| p.display().to_string()).unwrap_or_else(|| "Computer".into())) };
-        let hist_open = matches!(self.popup, Popup::History { panel, .. } if panel == id);
-        let mut hist_at = None;
-        let keymap = &self.keymap;
-        crate::kit::capsule_group(ui, round, &pal, |ui| {
-            let r = crate::kit::bar_item(ui, "toolbar button", "", can_back, false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Back, c));
-            if cmd_tip(r, back_to, Cmd::Back, keymap, &pal).clicked() {
-                cmd = Some(Cmd::Back);
+        // What fits, widest panel first: everything; then the view and split buttons go
+        // (they have keys), then the sort's word, then Up. The terminal button stays
+        // longest: only a sliver of a panel loses it.
+        let w = row1.width() - 2.0 * pad;
+        let sort_word = crate::popups::sort_keys().iter().find(|k| k.0 == sort).map_or("Sort", |k| k.1.trim_start_matches("Date "));
+        let sort_font = FontId::proportional(self.cfg.font_size);
+        let word_w = ui.painter().layout_no_wrap(capitalize(sort_word), sort_font.clone(), pal.text).size().x;
+        let (mut show_term, mut show_view, mut show_split, mut show_word, mut show_dir, mut show_up, mut show_sort) = (w >= 200.0, w >= 680.0, w >= 600.0, w >= 520.0, w >= 440.0, w >= 330.0, true);
+        // Then, whatever the width, the search keeps a few letters' room: what is left
+        // out goes in the same order until it does.
+        let min_search = 120.0;
+        let (sort_w, right_w, left_w) = loop {
+            let sort_w = if show_word { 18.0 + 8.0 + word_w + 30.0 } else { b };
+            let right_w = [show_view, show_split, show_term, show_dir].iter().filter(|x| **x).count() as f32 * (b + gap) + 3.0 * gap + if show_sort { sort_w + gap } else { 0.0 } + b;
+            let left_w = if show_up { 3.0 } else { 2.0 } * (b + gap) + gap;
+            if w - left_w - right_w >= min_search {
+                break (sort_w, right_w, left_w);
             }
-            let r = crate::kit::bar_item(ui, "toolbar button", "", can_fwd, false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Forward, c));
-            if cmd_tip(r, fwd_to, Cmd::Forward, keymap, &pal).clicked() {
+            if show_view {
+                show_view = false;
+            } else if show_split {
+                show_split = false;
+            } else if show_dir {
+                show_dir = false;
+            } else if show_word {
+                show_word = false;
+            } else if show_up {
+                show_up = false;
+            } else if show_sort {
+                show_sort = false;
+            } else if show_term {
+                show_term = false;
+            } else {
+                break (sort_w, right_w, left_w);
+            }
+        };
+        let mut cmd = None;
+        let mut x = row1.left() + pad;
+        let circle = |x: f32| Rect::from_center_size(pos2(x + b / 2.0, cy), Vec2::splat(b));
+        // Back, forward, up: tonal circles.
+        let r = circle(x);
+        if cmd_tip(tonal_button(ui, r, Id::new(("back", id)), "toolbar button", can_back, false, &pal, |p, r, c| paint_glyph(p, r, Glyph::Back, c)), back_to, Cmd::Back, &self.keymap, &pal).clicked() {
+            cmd = Some(Cmd::Back);
+        }
+        x += b + gap;
+        // A sliver of a panel keeps Back and its menu.
+        if w >= 150.0 {
+            let r = circle(x);
+            let fresp = tonal_button(ui, r, Id::new(("fwd", id)), "toolbar button", can_fwd, false, &pal, |p, r, c| paint_glyph(p, r, Glyph::Forward, c));
+            if cmd_tip(fresp, fwd_to, Cmd::Forward, &self.keymap, &pal).clicked() {
                 cmd = Some(Cmd::Forward);
             }
-            let r = crate::kit::bar_item(ui, "toolbar button", "", !tab::is_computer(&path), false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Up, c));
-            if cmd_tip(r, up_to, Cmd::Up, keymap, &pal).clicked() {
+            x += b + gap;
+        }
+        if show_up {
+            let r = circle(x);
+            let uresp = tonal_button(ui, r, Id::new(("up", id)), "toolbar button", !tab::is_computer(&path), false, &pal, |p, r, c| paint_glyph(p, r, Glyph::Up, c));
+            if uresp.secondary_clicked() {
+                self.popup = Popup::history(id, r.left_bottom());
+            }
+            if cmd_tip(uresp, up_to, Cmd::Up, &self.keymap, &pal).clicked() {
                 cmd = Some(Cmd::Up);
             }
-            let hr = crate::kit::bar_item(ui, "toolbar button", "Recent locations", true, hist_open, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::ChevronDown, c));
-            if hr.clicked() {
-                hist_at = Some(hr.rect.left_bottom());
-            }
-        });
-        if let Some(at) = hist_at {
-            self.popup = Popup::history(id, at);
+            x += b + gap;
         }
-        // The filter field at the right end: compact while idle, wider while it is used,
-        // and never taking the path's room below a few segments.
-        let rest = ui.available_width();
-        let (busy, github) = {
-            let p = &self.panels[&id];
-            let t = p.tab();
-            (p.filter_has_focus || p.focus_filter || p_filter_active(t), tab::is_github(&t.path))
+        x += gap;
+        let _ = left_w;
+        // The search bar takes the middle; a panel too narrow for it shows none.
+        let search_r = Rect::from_min_max(pos2(x, cy - 20.0), pos2((row1.right() - pad - right_w).max(x), cy + 20.0));
+        if !github && search_r.width() >= 60.0 {
+            ui.set_clip_rect(search_r.intersect(outer_clip));
+            self.search_field(ui, id, search_r);
+            ui.set_clip_rect(outer_clip);
+        }
+        // The right-hand tools.
+        let mut x = search_r.right() + 2.0 * gap;
+        if show_view {
+            let r = circle(x);
+            let mode = self.panels[&id].tab().settings.clone();
+            let sym = if mode.column_view { "view-columns" } else if mode.stack_view { "view-stack" } else if crate::listing::mode_of(&mode) == crate::listing::Mode::Details || crate::listing::mode_of(&mode) == crate::listing::Mode::Tree { "view-list" } else { "view-icons" };
+            let open = matches!(self.popup, Popup::Zoom { panel, .. } if panel == id);
+            let resp = tonal_button(ui, r, Id::new(("view", id)), "toolbar button", true, open, &pal, |p, r, c| {
+                crate::theme::paint_symbol(p, r, sym, c);
+            });
+            if resp.on_hover_text("View and icon size").clicked() {
+                self.actions.push(Action::FocusPanel(id));
+                self.popup = Popup::zoom(id, pos2(r.left() - 120.0, r.bottom() + 330.0));
+            }
+            x += b + gap;
+        }
+        if show_split {
+            let r = circle(x);
+            let split = self.panels.len() > 1;
+            let resp = tonal_button(ui, r, Id::new(("split", id)), "toolbar button", true, split, &pal, |p, r, c| {
+                crate::theme::paint_symbol(p, r, "columns-2", c);
+            });
+            let tip = if split { "Close this panel".to_string() } else { "Split right (Ctrl+S; below: Ctrl+Shift+S)".to_string() };
+            if resp.on_hover_text(tip).clicked() {
+                self.actions.push(Action::FocusPanel(id));
+                cmd = Some(if split { Cmd::ClosePanel } else { Cmd::SplitRight });
+            }
+            x += b + gap;
+        }
+        if show_term {
+            let r = circle(x);
+            let term_open = self.terminal.pty().is_some();
+            let resp = tonal_button(ui, r, Id::new(("term", id)), "toolbar button", true, term_open, &pal, |p, r, c| {
+                crate::theme::paint_symbol(p, r, "square-terminal", c);
+            });
+            if cmd_tip(resp, Some(if term_open { "Hide the terminal".into() } else { "Terminal here, under the files".into() }), Cmd::TerminalPanel, &self.keymap, &pal).clicked() {
+                self.actions.push(Action::FocusPanel(id));
+                cmd = Some(Cmd::TerminalPanel);
+            }
+            x += b + gap;
+        }
+        x += gap;
+        // Sort: what it is sorted by (a menu), then which way (one click reverses).
+        if show_sort {
+            let sr = Rect::from_min_size(pos2(x, cy - b / 2.0), vec2(sort_w, b));
+            let sort_open = matches!(self.popup, Popup::SortMenu { panel, .. } if panel == id);
+            let sresp = ui.interact(sr, Id::new(("sort", id)), Sense::click());
+            note_control(ui, sr, "sort button");
+            let hot = sresp.hovered();
+            crate::mochi::pill(ui.painter(), sr, tonal_fill(&pal, hot, sort_open));
+            let ink = if sort_open { pal.text } else if hot { pal.text } else { pal.text_dim };
+            let ir = Rect::from_center_size(pos2(sr.left() + if show_word { 21.0 } else { b / 2.0 }, cy), Vec2::splat(17.0));
+            paint_sort_glyph(ui.painter(), ir, ink);
+            if show_word {
+                ui.painter().text(pos2(ir.right() + 8.0, cy), Align2::LEFT_CENTER, capitalize(sort_word), sort_font, if hot || sort_open { pal.text } else { pal.text_dim.lerp_to_gamma(pal.text, 0.4) });
+            }
+            if sresp.on_hover_text("Sort by").clicked() {
+                self.actions.push(Action::FocusPanel(id));
+                self.popup = Popup::SortMenu { panel: id, anchor: sr.right_bottom() };
+            }
+            x += sort_w + gap;
+        }
+        if show_dir {
+            let r = circle(x);
+            let (a, d) = crate::popups::sort_dir_labels(sort);
+            let dresp = tonal_button(ui, r, Id::new(("sort dir", id)), "sort direction", true, false, &pal, |p, r, c| paint_dir_glyph(p, r, desc, c));
+            if dresp.on_hover_text(format!("{} · click for {}", if desc { d } else { a }, if desc { "ascending" } else { "descending" })).clicked() {
+                self.actions.push(Action::FocusPanel(id));
+                cmd = Some(Cmd::SortReverse);
+            }
+            x += b + gap;
+        }
+        // The ⋮ menu, where there is room for it after the rest.
+        if x + b <= row1.right() - pad + 0.5 {
+            let menu_r = circle(x);
+            let open = matches!(self.popup, Popup::PanelMenu { panel, .. } if panel == id);
+            let resp = tonal_button(ui, menu_r, Id::new(("panel menu", id)), "panel menu", true, open, &pal, |p, r, c| {
+                for dy in [-5.0, 0.0, 5.0] {
+                    p.circle_filled(r.center() + vec2(0.0, dy), 1.7, c);
+                }
+            });
+            if resp.on_hover_text("More").clicked() {
+                self.actions.push(Action::FocusPanel(id));
+                self.popup = Popup::panel_menu(id, menu_r.right_bottom());
+            }
+        }
+        // The path, and how many items the folder holds.
+        let track = Rect::from_min_max(pos2(row2.left() + pad, row2.top() + 3.0), pos2(row2.right() - pad, row2.bottom() - 7.0));
+        crate::mochi::pill(ui.painter(), track, crate::mochi::mix(pal.panel, pal.bg, 0.35));
+        let count = {
+            let t = self.panels[&id].tab();
+            let n = t.counts.0 + t.counts.2;
+            (!github && track.width() > 260.0).then(|| format!("{} {}", fmt_count(n), if n == 1 { "item" } else { "items" }))
         };
-        let fw = if github { 0.0 } else if busy { (rest * 0.45).clamp(170.0, 340.0) } else { (rest * 0.24).clamp(90.0, 210.0) };
-        let fw = if github { 0.0 } else { fw.min(rest - 110.0).max(64.0f32.min(rest * 0.5)) };
-        // The filter keeps to the right end of the room, the path takes what is left before
-        // it: measured from both ends, neither runs into the menu or is cut short.
-        let end = ui.max_rect().right();
-        let fr = Rect::from_min_max(pos2(end - fw, rect.center().y - CAP_H / 2.0), pos2(end, rect.center().y + CAP_H / 2.0));
-        let path_w = ((if fw > 0.0 { fr.left() - 6.0 } else { end }) - ui.cursor().min.x).max(0.0);
-        let cap = Rect::from_min_size(pos2(ui.cursor().min.x, rect.center().y - CAP_H / 2.0), vec2(path_w, CAP_H));
-        ui.allocate_rect(cap, Sense::hover());
-        if path_w > 2.0 * INSET + 8.0 {
-            crate::kit::capsule(ui.painter(), cap, round, &pal);
-            // The folder's own two, inside the path at its end, when there is room for
-            // them and a few segments.
-            let own = path_w >= 2.0 * ITEM.x + 2.0 * INSET + 96.0;
-            let inner = cap.shrink(INSET);
-            let crumbs_rect = Rect::from_min_max(inner.min, pos2(if own { inner.right() - 2.0 * ITEM.x - 2.0 } else { inner.right() }, inner.bottom()));
-            let smart = self.panels[&id].tab().smart.as_ref().map(|s| s.name.clone());
-            self.breadcrumbs(ui, id, crumbs_rect, &path, flatten, smart);
-            if own {
-                // Lock (saved view settings): open when this folder follows the general view.
-                let lr = Rect::from_min_size(pos2(inner.right() - 2.0 * ITEM.x, inner.top()), ITEM);
-                let lresp = crate::kit::bar_item_at(ui, lr, Id::new(("saved view", id)), "toolbar button", if saved { "View settings saved for this folder" } else { "Save view settings for this folder" }, true, false, round, &pal, |p, r, c| paint_glyph(p, r, if saved { Glyph::Lock } else { Glyph::LockOpen }, if saved { pal.accent } else { c }));
-                if lresp.clicked() {
-                    self.popup = Popup::saved_view(id);
-                }
-                // Bookmark ribbon: solid while the folder is bookmarked.
-                let bookmarked = self.ud.bookmarks.contains(&path);
-                let br = Rect::from_min_size(pos2(inner.right() - ITEM.x, inner.top()), ITEM);
-                let bresp = crate::kit::bar_item_at(ui, br, Id::new(("bookmark", id)), "bookmark", "", true, false, round, &pal, |p, r, c| paint_bookmark(p, r, bookmarked, if bookmarked { pal.text } else { c }));
-                if cmd_tip(bresp, Some(if bookmarked { "Remove bookmark".into() } else { "Bookmark this folder".into() }), Cmd::ToggleBookmark, &self.keymap, &pal).clicked() && !tab::is_place(&path) {
-                    self.actions.push(Action::FocusPanel(id));
-                    if bookmarked {
-                        self.actions.push(Action::BookmarkRemove(path.clone()));
-                    } else {
-                        self.actions.push(Action::BookmarkAdd(path.clone()));
-                    }
-                }
-            }
+        let count_w = count.as_ref().map_or(0.0, |c| ui.painter().layout_no_wrap(c.clone(), FontId::proportional(self.cfg.font_size - 1.5), pal.text_dim).size().x + 16.0);
+        if let Some(c) = count {
+            ui.painter().text(pos2(track.right() - 14.0, track.center().y), Align2::RIGHT_CENTER, c, FontId::proportional(self.cfg.font_size - 1.5), pal.text_dim);
         }
-        if fw > 0.0 {
-            self.filter_field(ui, id, fr);
-        }
-        ui.set_clip_rect(outer_clip);
-        let open = matches!(self.popup, Popup::PanelMenu { panel, .. } if panel == id);
-        let resp = crate::kit::bar_item_at(ui, menu_r, Id::new(("panel menu", id)), "panel menu", "Panel menu", true, open, round, &pal, |p, r, c| {
-            for dy in [-4.5, 0.0, 4.5] {
-                p.circle_filled(r.center() + vec2(0.0, dy), 1.5, c);
-            }
-        });
-        if resp.clicked() {
-            self.actions.push(Action::FocusPanel(id));
-            self.popup = Popup::panel_menu(id, menu_r.left_bottom());
-        }
+        let crumbs_rect = Rect::from_min_max(track.min + vec2(5.0, 4.0), pos2(track.right() - 6.0 - count_w, track.bottom() - 4.0));
+        let smart = self.panels[&id].tab().smart.as_ref().map(|s| s.name.clone());
+        ui.set_clip_rect(crumbs_rect.expand(2.0).intersect(outer_clip));
+        self.breadcrumbs(ui, id, crumbs_rect, &path, flatten, smart);
+        ui.set_clip_rect(orig_clip);
         if let Some(c) = cmd {
             self.actions.push(Action::FocusPanel(id));
             self.actions.push(Action::Cmd(c));
@@ -1450,7 +1501,7 @@ impl App {
                 ui.painter().rect_filled(r, rad, crate::kit::touch(&pal));
             }
             let (dy, a) = if fresh { (6.0 * (1.0 - rise), rise) } else { (0.0, 1.0) };
-            let tc = if last || dropped { crate::kit::on_lift(&pal) } else if resp.hovered() { pal.text } else { pal.text_dim };
+            let tc = if last || dropped { pal.text } else if resp.hovered() { pal.text } else { pal.text_dim };
             ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0 + dy), g, tc.gamma_multiply(a));
             if last {
                 here = Some(r);
@@ -1501,74 +1552,101 @@ impl App {
             let r = ui.ctx().animate_value_with_time(Id::new(("crumb lift r", id)), u.right(), t);
             let pill = Rect::from_min_max(pos2(l.min(r - 8.0).max(rect.left()), u.top()), pos2(r.min(rect.right()), u.bottom()));
             if pill.is_finite() && pill.width() > 4.0 {
-                ui.painter().set(pill_slot, egui::Shape::rect_filled(pill, rad, crate::kit::lift(&pal)));
-                ui.painter().rect_stroke(pill, rad, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+                // Mochi: the folder shown is an accent container.
+                ui.painter().set(pill_slot, egui::Shape::rect_filled(pill, rad, pal.selected));
             }
         }
     }
 
-    /// The filter, a compact field at the toolbar's right end. It widens while it holds
-    /// something or has the keyboard, so a filter in force is always in sight.
-    fn filter_field(&mut self, ui: &mut Ui, id: u64, frame_rect: Rect) {
+    /// Mochi: the search bar. What is typed narrows the folder to what matches, in its
+    /// subfolders too (the folder is walked for it, as Expand does, and folds back when the
+    /// search is cleared); its two switches search inside files, and expand the folder
+    /// to every file under it without searching.
+    fn search_field(&mut self, ui: &mut Ui, id: u64, frame_rect: Rect) {
         let pal = self.pal;
+        let font_size = self.cfg.font_size;
+        let deep = self.cfg.search_subfolders;
         let Some(p) = self.panels.get_mut(&id) else { return };
         let focus_req = std::mem::take(&mut p.focus_filter);
+        let had_focus = p.filter_has_focus;
         let t = p.tab_mut();
         let types_on = !t.settings.only_types.is_empty();
-        let (vf, vfi) = (t.counts.0, t.counts.2);
+        let flat = t.flatten || t.expand_all_on;
+        let hot = ui.rect_contains_pointer(frame_rect) || had_focus;
+        ui.painter().rect(frame_rect, crate::mochi::pill_r(frame_rect), crate::mochi::mix(pal.panel, pal.hover, if hot { 0.85 } else { 0.6 }), if had_focus || !t.filter.is_empty() { Stroke::new(1.5, pal.accent.gamma_multiply(0.8)) } else { Stroke::NONE }, StrokeKind::Inside);
+        let ir = Rect::from_center_size(pos2(frame_rect.left() + 20.0, frame_rect.center().y), Vec2::splat(17.0));
+        paint_glyph(ui.painter(), ir, Glyph::Search, if had_focus || !t.filter.is_empty() { pal.accent } else { pal.text_dim });
+        // A click anywhere on the bar puts the cursor in it (taken first, so the switches
+        // and the field drawn over it get their own clicks).
+        let bar_click = ui.interact(frame_rect, Id::new(("search bar", id)), Sense::click()).clicked();
+        // The switches at the right end, each a small circle, filled in the accent while on.
+        let s = 30.0;
         let fw = frame_rect.width();
-        // A capsule like the path's beside it; only a filter in force draws its edge in
-        // the accent (the field has the keyboard whenever typing filters, so that says
-        // nothing).
-        let round = self.cfg.round_corners;
-        crate::kit::capsule(ui.painter(), frame_rect, round, &pal);
-        if p_filter_active(t) {
-            ui.painter().rect_stroke(frame_rect, crate::kit::radius(frame_rect.height(), round), Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
-        }
-        // Searching inside files shows as the field's own icon, in the accent; a click on it
-        // goes back to names.
-        let ir = Rect::from_center_size(pos2(frame_rect.left() + 15.0, frame_rect.center().y), Vec2::splat(14.0));
-        if t.content.on {
-            let cresp = ui.interact(ir.expand(2.0), Id::new(("fcont", id)), Sense::click()).on_hover_text("Searching inside files · click for names (Ctrl+Shift+F)");
-            note_control(ui, ir, "contents toggle");
-            crate::theme::paint_symbol(ui.painter(), ir, "text-search", pal.accent);
-            if cresp.clicked() {
-                t.content.on = false;
-                t.dirty = true;
+        let switches = fw >= 200.0;
+        let mut bx = frame_rect.right() - 5.0 - s / 2.0;
+        let toggle = |ui: &mut Ui, bx: f32, key: &'static str, on: bool, tip: &str, sym: &str| -> bool {
+            let r = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(s));
+            let resp = ui.interact(r, Id::new((key, id)), Sense::click());
+            note_control(ui, r, key);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tip));
+            if on {
+                ui.painter().circle_filled(r.center(), s / 2.0, if resp.hovered() { pal.accent } else { pal.accent.gamma_multiply(0.92) });
+            } else if resp.hovered() {
+                ui.painter().circle_filled(r.center(), s / 2.0, crate::mochi::mix(pal.panel, pal.hover, 1.0).lerp_to_gamma(pal.text, 0.06));
             }
-        } else {
-            paint_glyph(ui.painter(), ir.shrink(1.0), Glyph::Search, pal.text_dim);
+            crate::theme::paint_symbol(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(16.0)), sym, if on { crate::mochi::on_accent(&pal) } else if resp.hovered() { pal.text } else { pal.text_dim });
+            resp.on_hover_text(tip).clicked()
+        };
+        let mut expand_click = false;
+        let mut content_click = false;
+        if switches {
+            expand_click = toggle(ui, bx, "expand toggle", flat, if flat { "Showing every file in the subfolders · click to fold back (Ctrl+E)" } else { "Expand: every file in the subfolders, in one list (Ctrl+E)" }, "list-tree");
+            bx -= s + 4.0;
+            content_click = toggle(ui, bx, "contents toggle", t.content.on, if t.content.on { "Searching inside files · click to search names (Ctrl+Shift+F)" } else { "Search inside files (Ctrl+Shift+F)" }, "text-search");
+            bx -= s + 4.0;
         }
-        let btns = if t.filter.is_empty() { 0.0 } else { 1.0 } + if types_on { 1.0 } else { 0.0 };
+        let mut clear_click = false;
+        let mut types_click = false;
+        if !t.filter.is_empty() {
+            let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(24.0));
+            let cresp = ui.interact(cr, Id::new(("fclr", id)), Sense::click()).on_hover_text("Clear (Esc)");
+            if cresp.hovered() {
+                ui.painter().circle_filled(cr.center(), 12.0, crate::kit::touch(&pal));
+            }
+            paint_glyph(ui.painter(), cr.shrink(6.0), Glyph::Close, pal.text_dim);
+            clear_click = cresp.clicked();
+            bx -= 28.0;
+        }
+        if types_on {
+            let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(24.0));
+            let cresp = ui.interact(cr, Id::new(("tclr", id)), Sense::click()).on_hover_text("Showing only some file types · click to show all");
+            ui.painter().circle_filled(cr.center(), 12.0, if cresp.hovered() { crate::kit::touch(&pal) } else { pal.accent.gamma_multiply(0.25) });
+            funnel(ui.painter(), cr.center(), pal.accent);
+            ui.painter().line_segment([cr.left_bottom() + vec2(6.0, -6.0), cr.right_top() + vec2(-6.0, 6.0)], Stroke::new(1.3, pal.accent));
+            types_click = cresp.clicked();
+            bx -= 28.0;
+        }
         let nudge = cap_nudge(ui, &egui::TextStyle::Body.resolve(ui.style()));
-        let shown = vf + vfi;
-        // How many are listed, as a figure at the field's end: what the filter would
-        // narrow, then what it has left. Only where it leaves the field room to type.
-        let small = FontId::proportional(self.cfg.font_size - 1.5);
-        let count = (fw >= 130.0 && !t.content.on).then(|| listing::tabular(ui, &fmt_count(shown), small, 80.0, crate::kit::words_of(pal.text_dim)));
-        let count_w = count.as_ref().map_or(0.0, |g| g.size().x + 8.0);
-        let edit_rect = Rect::from_min_max(pos2(frame_rect.left() + 26.0, frame_rect.top() + 1.0 + nudge), pos2(frame_rect.right() - 22.0 * btns - 8.0 - count_w, frame_rect.bottom() - 1.0 + nudge));
-        let changed = if t.git_only.is_some() { "Filter changed…" } else { "Filter…" };
-        let hint = if t.content.on { if fw < 150.0 { "Find…" } else { "Find in files…" } } else { changed };
+        let edit_rect = Rect::from_min_max(pos2(ir.right() + 6.0, frame_rect.top() + 1.0 + nudge), pos2((bx - s / 2.0 + 10.0).max(ir.right() + 30.0), frame_rect.bottom() - 1.0 + nudge));
+        // The folder as its tab names it (a network share by its name, not GVFS's folder).
+        let folder = t.title().trim_end_matches(" […]").to_string();
+        let hint = if fw < 220.0 { "Search…".to_string() } else if t.content.on { format!("Search inside files in {folder}") } else if t.git_only.is_some() { "Search changed files…".to_string() } else { format!("Search in {folder}") };
         let before = t.filter.clone();
         let mut fui = ui.new_child(UiBuilder::new().max_rect(edit_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        // A field is at least a control's height, which grows with Spacing: taller than the
-        // box, it would start at the box's top and centre its text below the box's middle.
         fui.spacing_mut().interact_size.y = edit_rect.height();
-        // Conditions and operators the filter understands (size>10M, -draft, a | b) show
-        // in the accent, a broken pattern in the danger colour.
         let (accent, text, danger) = (pal.accent, pal.text, pal.danger);
-        // One line that scrolls, as egui lays out a single-line field itself: a long
-        // query wrapped onto a second line below the box.
         let mut conds = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
             let job = crate::query::job(buf.as_str(), egui::TextStyle::Body.resolve(ui.style()), text, accent, danger);
             ui.fonts_mut(|f| f.layout_job(job))
         };
-        let mut edit = egui::TextEdit::singleline(&mut t.filter).id(Id::new(("filter field", id))).hint_text(egui::RichText::new(hint).color(pal.text_dim)).frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).desired_width(edit_rect.width()).font(egui::TextStyle::Body).align(egui::Align2::LEFT_CENTER);
+        let mut edit = egui::TextEdit::singleline(&mut t.filter).id(Id::new(("filter field", id))).hint_text(egui::RichText::new(hint).color(pal.text_dim)).frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).desired_width(edit_rect.width()).font(FontId::proportional(font_size)).align(egui::Align2::LEFT_CENTER);
         if crate::query::marked(&before) {
             edit = edit.layouter(&mut conds);
         }
         let resp = fui.add(edit);
+        if bar_click {
+            resp.request_focus();
+        }
         if focus_req {
             resp.request_focus();
             if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
@@ -1578,39 +1656,36 @@ impl App {
             }
         }
         let has_focus = resp.has_focus();
+        // Typing a search walks the subfolders too.
         if t.filter != before {
             t.dirty = true;
-        }
-        let mut bx = frame_rect.right() - 16.0;
-        if let Some(g) = count {
-            let cx = frame_rect.right() - 12.0 - 22.0 * btns - g.size().x;
-            ui.painter().galley(pos2(cx, frame_rect.center().y - g.size().y / 2.0), g, pal.text_dim);
-        }
-        if !t.filter.is_empty() {
-            let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(18.0));
-            let cresp = ui.interact(cr, Id::new(("fclr", id)), Sense::click()).on_hover_text("Clear filter (Esc)");
-            if cresp.hovered() {
-                ui.painter().rect_filled(cr, crate::kit::radius(cr.height(), round), crate::kit::touch(&pal));
+            if deep && before.is_empty() && !t.filter.is_empty() && !t.flatten && !t.expand_all_on && t.smart.is_none() && !tab::is_place(&t.path) && t.archive.is_none() {
+                t.set_flatten(true);
+                t.auto_flat = t.flatten;
             }
-            paint_glyph(ui.painter(), cr.shrink(4.0), Glyph::Close, pal.text_dim);
-            if cresp.clicked() {
-                t.filter.clear();
-                t.dirty = true;
-            }
-            bx -= 22.0;
         }
-        if types_on {
-            let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(18.0));
-            let cresp = ui.interact(cr, Id::new(("tclr", id)), Sense::click()).on_hover_text("Showing only some file types · click to show all");
-            ui.painter().rect_filled(cr, crate::kit::radius(cr.height(), round), if cresp.hovered() { crate::kit::touch(&pal) } else { pal.accent.gamma_multiply(0.25) });
-            funnel(ui.painter(), cr.center(), pal.accent);
-            ui.painter().line_segment([cr.left_bottom() + vec2(4.0, -4.0), cr.right_top() + vec2(-4.0, 4.0)], Stroke::new(1.3, pal.accent));
-            if cresp.clicked() {
-                t.settings.only_types.clear();
-                t.dirty = true;
-            }
+        if clear_click {
+            t.filter.clear();
+            t.dirty = true;
+        }
+        if types_click {
+            t.settings.only_types.clear();
+            t.dirty = true;
+        }
+        if content_click {
+            t.content.on = !t.content.on;
+            t.dirty = true;
+            // The field keeps the keyboard, as Maia's toggle hands it back.
+            p.focus_filter = true;
         }
         p.filter_has_focus = has_focus;
+        if expand_click {
+            if let Some(t) = self.panels.get_mut(&id).map(|p| p.tab_mut()) {
+                t.auto_flat = false;
+            }
+            self.actions.push(Action::FocusPanel(id));
+            self.actions.push(Action::Cmd(Cmd::ToggleFlatten));
+        }
     }
 
     /// The status bar: one line of plain words. What the folder holds (or what is
@@ -1618,7 +1693,6 @@ impl App {
     /// and between them only what is going on: jobs, the git branch, a walk's timing.
     fn footer_ui(&mut self, ui: &mut Ui, id: u64, rect: Rect) {
         let pal = self.pal;
-        ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, pal.border));
         // The GitHub page has no files to filter or count: only when its answers are from.
         if self.panels.get(&id).is_some_and(|p| tab::is_github(&p.tab().path)) {
             let s = self.github.status_line();
@@ -2255,4 +2329,55 @@ pub fn funnel(p: &egui::Painter, c: egui::Pos2, col: Color32) {
 /// Bookmark ribbon: outlined, or solid when the folder is bookmarked.
 pub fn paint_bookmark(p: &egui::Painter, r: Rect, filled: bool, col: Color32) {
     crate::theme::paint_symbol(p, r, if filled { "bookmark@bold" } else { "bookmark" }, col);
+}
+
+/// Mochi: a tonal circle button (Material 3's filled tonal icon button): a soft fill a
+/// step off the card, stronger under the pointer; filled in the accent while `on`.
+#[allow(clippy::too_many_arguments)]
+fn tonal_button(ui: &Ui, r: Rect, id: Id, what: &'static str, enabled: bool, on: bool, pal: &Palette, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    let resp = ui.interact(r, id, if enabled { Sense::click() } else { Sense::hover() });
+    note_control(ui, r, what);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, what));
+    let hot = enabled && resp.hovered();
+    let fill = if on { if hot { pal.accent } else { pal.accent.gamma_multiply(0.92) } } else if enabled { tonal_fill(pal, hot, false) } else { crate::mochi::mix(pal.panel, pal.hover, 0.3) };
+    ui.painter().circle_filled(r.center(), r.width() / 2.0, fill);
+    let ink = if on { crate::mochi::on_accent(pal) } else if !enabled { pal.text_dim.gamma_multiply(0.4) } else if hot { pal.text } else { pal.text_dim.lerp_to_gamma(pal.text, 0.35) };
+    paint(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(17.0)), ink);
+    resp
+}
+
+/// The fill of a tonal control at rest, under the pointer, or while what it opens is open.
+fn tonal_fill(pal: &Palette, hot: bool, open: bool) -> Color32 {
+    crate::mochi::mix(pal.panel, pal.hover, if open { 1.0 } else if hot { 0.95 } else { 0.6 }).lerp_to_gamma(pal.text, if open || hot { 0.04 } else { 0.0 })
+}
+
+/// The sort button's mark: A over Z.
+fn paint_sort_glyph(p: &egui::Painter, r: Rect, col: Color32) {
+    p.text(pos2(r.center().x, r.top() + 4.0), Align2::CENTER_CENTER, "A", crate::theme::semibold(9.0), col);
+    p.text(pos2(r.center().x, r.bottom() - 4.0), Align2::CENTER_CENTER, "Z", crate::theme::semibold(9.0), col);
+}
+
+/// "modified" → "Modified".
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// The sort direction's mark: an arrow, and beside it bars that grow downwards
+/// (ascending) or shrink (descending).
+fn paint_dir_glyph(p: &egui::Painter, r: Rect, desc: bool, col: Color32) {
+    let st = Stroke::new(1.6, col);
+    let ax = r.left() + 4.0;
+    let (top, bot) = (r.top() + 2.0, r.bottom() - 2.0);
+    p.line_segment([pos2(ax, top), pos2(ax, bot)], st);
+    let (tip, back) = if desc { (bot, -3.5) } else { (top, 3.5) };
+    p.line_segment([pos2(ax - 3.0, tip + back), pos2(ax, tip)], st);
+    p.line_segment([pos2(ax + 3.0, tip + back), pos2(ax, tip)], st);
+    let x0 = r.left() + 9.5;
+    let full = r.right() - x0;
+    for i in 0..3 {
+        let f = if desc { 1.0 - i as f32 * 0.3 } else { 0.4 + i as f32 * 0.3 };
+        let y = r.top() + 3.5 + i as f32 * 5.0;
+        p.line_segment([pos2(x0, y), pos2(x0 + full * f, y)], st);
+    }
 }

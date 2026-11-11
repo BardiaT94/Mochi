@@ -67,7 +67,7 @@ const COPYPATH: &[u8] = include_bytes!("../assets/tour/copypath.webp");
 
 pub const WELCOME: &[Page] = &[
     Page {
-        title: "Welcome to Maia",
+        title: "Welcome to Mochi",
         text: "A file manager to drive from the keyboard, with the mouse there when you want it. A few choices, then a short look around.",
         body: Body::Hero,
         keys: &[],
@@ -546,8 +546,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
             let (tx, rx) = sync_channel(1);
             let c = ctx.clone();
             let _ = std::thread::Builder::new().name("welcome icon".into()).spawn(move || {
-                if let Some(i) = crate::imgdec::decode_fit(crate::install::ICON_PNG, 256) {
-                    let _ = tx.send(egui::ColorImage::from_rgba_unmultiplied([i.w as usize, i.h as usize], &i.px));
+                // Mochi: the icon is an SVG.
+                if let Some((w, h, px)) = crate::svg::render(crate::install::ICON_SVG.as_bytes(), 256) {
+                    let _ = tx.send(egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px));
                     c.request_repaint();
                 }
             });

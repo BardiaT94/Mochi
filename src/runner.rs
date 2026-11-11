@@ -380,6 +380,7 @@ impl ApplicationHandler<UserEvent> for Runner {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, mut event: WindowEvent) {
         let Some(gl) = self.gl.as_ref() else { return };
+        let mut empty_paste = false;
         match &event {
             WindowEvent::CloseRequested => {
                 // Edits not saved are asked about first; the window stays until then.
@@ -405,7 +406,12 @@ impl ApplicationHandler<UserEvent> for Runner {
                 let v = matches!(k.physical_key, PhysicalKey::Code(KeyCode::KeyV)) || matches!(&k.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v"));
                 let paste = (self.mods.control_key() && v) || matches!(k.logical_key, Key::Named(NamedKey::Paste));
                 if paste {
-                    if let (Some(state), Some(text)) = (self.state.as_mut(), crate::clipboard::get_text()) {
+                    let text = crate::clipboard::get_text().filter(|t| !t.is_empty());
+                    // Mochi: with no text to paste (a picture copied), egui drops the key; the
+                    // paste still goes out, empty, so the terminal sends ^V and a program there
+                    // (Claude Code) reads the picture itself, as in kitty.
+                    empty_paste = text.is_none();
+                    if let (Some(state), Some(text)) = (self.state.as_mut(), text) {
                         state.set_clipboard_text(text);
                     }
                 }
@@ -427,6 +433,9 @@ impl ApplicationHandler<UserEvent> for Runner {
         }
         if let Some(state) = self.state.as_mut() {
             let r = state.on_window_event(&gl.window, &event);
+            if empty_paste {
+                state.egui_input_mut().events.push(egui::Event::Paste(String::new()));
+            }
             if r.repaint {
                 gl.window.request_redraw();
             }

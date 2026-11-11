@@ -21,12 +21,12 @@ use crate::theme::{Glyph, Palette, paint_glyph};
 use crate::vt::{self, Cell, Term};
 
 /// The gap above the pane (as between split panels) and its header's height.
-const GAP: f32 = 3.0;
+const GAP: f32 = crate::mochi::GUTTER;
 const HEADER_H: f32 = 30.0;
 const MIN_H: f32 = 90.0;
 const DEFAULT_H: f32 = 240.0;
 /// Space around the cells.
-const PAD: f32 = 6.0;
+const PAD: f32 = 16.0;
 
 /// What the reader thread and the UI share.
 pub struct Shared {
@@ -130,7 +130,11 @@ impl Pty {
     }
 
     pub fn resize(&self, cols: usize, rows: usize) {
-        self.shared.term().screen.resize(cols, rows);
+        {
+            let mut t = self.shared.term();
+            t.screen.resize(cols, rows);
+            t.screen.cell_px = crate::graphics::cell_px();
+        }
         set_size(self.master.as_raw_fd(), cols, rows);
     }
 
@@ -177,7 +181,9 @@ impl Drop for Pty {
 }
 
 fn set_size(fd: i32, cols: usize, rows: usize) {
-    let ws = libc::winsize { ws_row: rows as u16, ws_col: cols as u16, ws_xpixel: 0, ws_ypixel: 0 };
+    // Mochi: the size in pixels too, which programs that show pictures size them by.
+    let (cw, ch) = crate::graphics::cell_px();
+    let ws = libc::winsize { ws_row: rows as u16, ws_col: cols as u16, ws_xpixel: (cw * cols as f32).round() as u16, ws_ypixel: (ch * rows as f32).round() as u16 };
     unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &ws) };
 }
 
@@ -408,10 +414,15 @@ pub fn toggle(app: &mut App) {
 pub fn new_shell(app: &mut App) {
     let t = app.panel().tab();
     let (here, dir) = (t.path.clone(), place(t).unwrap_or_else(crate::fsx::home));
-    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
-    let mut cmd = Command::new(shell);
-    cmd.current_dir(&dir);
+    // Mochi: the login shell, as kitty starts it, told where it runs (for its greeting).
+    let mut cmd = Command::new(crate::mochi::login_shell());
+    cmd.current_dir(&dir).env("TERM_PROGRAM", "Mochi");
     let (cols, rows) = app.terminal.size;
+    // Mochi: the cell's pixel size before the first frame of a first terminal draws it.
+    let font = FontId::monospace(app.cfg.font_size);
+    let (cw, ch) = app.ctx.fonts_mut(|f| (f.glyph_width(&font, 'M'), f.row_height(&font).round()));
+    let ppp = app.ctx.pixels_per_point();
+    crate::graphics::set_cell_px((cw * ppp, ch * ppp));
     match Pty::spawn(cmd, cols, rows, app.ctx.clone()) {
         Ok(p) => {
             let now = app.ctx.input(|i| i.time);
@@ -623,6 +634,11 @@ pub fn keys(app: &mut App, ctx: &egui::Context, events: &[Event]) {
     ctx.input_mut(|i| i.events.retain(|e| !matches!(e, Event::Key { .. } | Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) | Event::Ime(_))));
 }
 
+thread_local! {
+    /// Mochi: the shown pictures' textures, by placement.
+    static TEXTURES: std::cell::RefCell<std::collections::HashMap<u64, egui::TextureHandle>> = Default::default();
+}
+
 /// Pasted text: line breaks as Enter sends them, marked as pasted when the program asked.
 fn paste(out: &mut Vec<u8>, s: &str, bracketed: bool) {
     let s = s.replace("\r\n", "\r").replace('\n', "\r");
@@ -636,7 +652,7 @@ fn paste(out: &mut Vec<u8>, s: &str, bracketed: bool) {
 }
 
 /// What a key sends, as xterm does. Keys that type text send it with their Text event.
-fn key_bytes(key: Key, m: Modifiers, app_cursor: bool, out: &mut Vec<u8>) {
+pub(crate) fn key_bytes(key: Key, m: Modifiers, app_cursor: bool, out: &mut Vec<u8>) {
     // xterm's modifier parameter: 1 + Shift + 2 Alt + 4 Ctrl.
     let n = 1 + m.shift as u8 + 2 * m.alt as u8 + 4 * m.ctrl as u8;
     let mut csi = |c: char, ss3: bool| {
@@ -678,11 +694,13 @@ fn key_bytes(key: Key, m: Modifiers, app_cursor: bool, out: &mut Vec<u8>) {
         }
         Key::Tab if m.shift => out.extend_from_slice(b"\x1b[Z"),
         Key::Escape => out.push(0x1b),
+        // Mochi: Ctrl+Backspace deletes the word before the cursor, as Alt+Backspace does
+        // in fish, bash and Claude Code (^H is a plain Backspace to them).
+        Key::Backspace if m.ctrl => out.extend_from_slice(b"\x1b\x7f"),
         _ => {
             let b = match key {
                 Key::Enter => b'\r',
                 Key::Tab => b'\t',
-                Key::Backspace if m.ctrl => 0x08,
                 Key::Backspace => 0x7f,
                 _ if !m.ctrl => return,
                 Key::Space | Key::Num2 => 0,
@@ -791,19 +809,25 @@ pub fn pane(app: &mut App, ui: &mut Ui, full: Rect, above: f32) {
             pane.height = DEFAULT_H;
         }
     }
-    let rad = if round { 8 } else { 0 };
+    // Mochi: a card like the panels, the screen a recessed well inside it.
+    let rad = if round { crate::mochi::CARD_R } else { 0 };
     let p = ui.painter_at(rect);
     p.rect_filled(rect, CornerRadius::same(rad), pal.panel);
     let body = Rect::from_min_max(pos2(rect.left(), rect.top() + HEADER_H), rect.max);
-    p.rect_filled(body, CornerRadius { nw: 0, ne: 0, sw: rad, se: rad }, pal.bg);
-    p.line_segment([body.left_top(), body.right_top()], Stroke::new(1.0_f32, pal.border));
-    let font = FontId::monospace(app.cfg.inspector_font_size);
+    crate::mochi::well(&p, body.shrink2(vec2(6.0, 0.0)).with_max_y(body.bottom() - 6.0), &pal);
+    // Mochi: the terminal at the interface's text size (the preview pane's is smaller).
+    let font = FontId::monospace(app.cfg.font_size);
     let (cw, row_h) = ui.fonts_mut(|f| (f.glyph_width(&font, 'M'), f.row_height(&font).round()));
     // The size the pane is going to (not the one it eases through): the shells are told once.
     let goal = room(app, full) - GAP - HEADER_H - 2.0 * PAD;
     let cols = ((full.width() - 2.0 * PAD) / cw).floor().max(2.0) as usize;
     let rows = (goal / row_h).floor().max(1.0) as usize;
     let pane = &mut app.terminal;
+    // Mochi: a new cell size (font, display scale) is told to the shells as a resize.
+    let px = (cw * ctx.pixels_per_point(), row_h * ctx.pixels_per_point());
+    if crate::graphics::set_cell_px(px) {
+        pane.size = (0, 0);
+    }
     if open && (cols, rows) != pane.size {
         for s in &mut pane.shells {
             s.pty.resize(cols, rows);
@@ -1019,7 +1043,7 @@ pub fn pane(app: &mut App, ui: &mut Ui, full: Rect, above: f32) {
         pane.blink = now;
     }
     // ------------------------------------------------ cells
-    let ansi = ansi(&pal);
+    let ansi = crate::mochi::ansi(app.cfg.theme).unwrap_or_else(|| ansi(&pal));
     let cur_shell = pane.shells.get(pane.cur);
     let sel = cur_shell.and_then(|c| c.sel).map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
     let (hits, hit_cur): (&[vt::Span], Option<usize>) = match cur_shell.and_then(|c| c.find.as_ref()).filter(|f| !f.bar.query.is_empty()) {
@@ -1101,6 +1125,21 @@ pub fn pane(app: &mut App, ui: &mut Ui, full: Rect, above: f32) {
     for (pos, g) in galleys {
         p.galley(pos, g, pal.text);
     }
+    // Mochi: pictures programs showed (kitty's graphics protocol), over the text.
+    let base = s.view_line(0) as f64;
+    TEXTURES.with(|t| {
+        let mut t = t.borrow_mut();
+        t.retain(|k, _| s.images.iter().any(|im| im.serial == *k));
+        for im in s.images.iter().filter(|im| im.alt == s.alt()) {
+            let y = im.line as f64 - base;
+            if y + im.span.1 as f64 <= first as f64 || y >= shown as f64 {
+                continue;
+            }
+            let tex = t.entry(im.serial).or_insert_with(|| ctx.load_texture(format!("terminal picture {}", im.serial), egui::ColorImage::from_rgba_unmultiplied(im.size, &im.rgba), egui::TextureOptions::LINEAR));
+            let r = Rect::from_min_size(pos2(x0 + im.col as f32 * cw, y0 + y as f32 * row_h), vec2(im.span.0 * cw, im.span.1 * row_h));
+            p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+    });
     // The link under the pointer, underlined along each row it is on.
     if let Some(((a, b), _)) = link {
         for n in a.0..=b.0 {

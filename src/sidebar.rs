@@ -46,8 +46,9 @@ struct Snapshot {
     places: Vec<(String, PathBuf, Glyph)>,
     marks: std::collections::HashMap<PathBuf, (bool, bool)>,
     files: std::collections::HashSet<PathBuf>,
-    drives: Vec<crate::drives::Drive>,
-    net: Vec<crate::network::Place>,
+    /// None in the quick first pass: the slow parts (drives, network places) come after.
+    drives: Option<Vec<crate::drives::Drive>>,
+    net: Option<Vec<crate::network::Place>>,
 }
 
 thread_local! {
@@ -118,10 +119,12 @@ pub fn places() -> Vec<(String, PathBuf, Glyph)> {
     add("Music", dirs::audio_dir(), Glyph::Music);
     add("Pictures", dirs::picture_dir(), Glyph::Pics);
     add("Videos", dirs::video_dir(), Glyph::Video);
+    // Mochi: cloud drives (Google Drive) are in Storage, not here.
     let td = trash_dir();
     let _ = std::fs::create_dir_all(&td);
     v.push(("Trash".into(), td, Glyph::Trash));
-    v.push(("Filesystem".into(), PathBuf::from("/"), Glyph::Root));
+    // Mochi: a drive for the filesystem (a bare slash reads as a stray mark).
+    v.push(("Filesystem".into(), PathBuf::from("/"), Glyph::Drive));
     v
 }
 
@@ -179,20 +182,26 @@ pub fn refresh(app: &App, ctx: &egui::Context) {
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         // Pick up a finished refresh.
-        if let Some(rx) = &c.job {
+        // Two passes land: the quick one (local only) first, then the full one.
+        while let Some(rx) = &c.job {
             match rx.try_recv() {
                 Ok(s) => {
-                    c.mounts = s.mounts;
+                    let full = s.drives.is_some();
+                    c.mounts = crate::mochi::keep_space(&c.mounts, s.mounts);
                     c.recents = s.recents;
                     c.places = s.places;
                     c.marks = s.marks;
                     c.files = s.files;
-                    if c.drives != s.drives || c.net != s.net {
-                        c.drives = s.drives;
-                        c.net = s.net;
-                        c.drives_gen += 1;
+                    if let (Some(drives), Some(net)) = (s.drives, s.net) {
+                        if c.drives != drives || c.net != net {
+                            c.drives = drives;
+                            c.net = net;
+                            c.drives_gen += 1;
+                        }
                     }
-                    c.job = None;
+                    if full {
+                        c.job = None;
+                    }
                     c.generation += 1;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => c.job = None,
@@ -218,15 +227,20 @@ pub fn refresh(app: &App, ctx: &egui::Context) {
         let (table, tools) = (crate::drives::mounts_table(), crate::drives::Tools::current());
         std::thread::spawn(move || {
             let (recent_in, marks_in) = inputs;
-            let drives = tools.as_ref().map(crate::drives::list).unwrap_or_default();
-            let net = tools.as_ref().filter(|t| t.has("gio")).map(crate::network::places).unwrap_or_default();
-            let mounts = fsx::mounts_in(&table)
-                .into_iter()
-                .map(|m| {
-                    let (t, f) = fsx::disk_space(&m.path).unwrap_or((0, 0));
-                    (m.path.clone(), tab::volume_label(&m.device, &m.path), t, f)
-                })
-                .collect();
+            // Free space on a network or FUSE mount (Google Drive) asks the server, which
+            // can take minutes: the quick pass leaves it out.
+            let remote = |m: &fsx::Mount| m.fstype.starts_with("fuse") || matches!(m.fstype.as_str(), "cifs" | "smb3" | "nfs" | "nfs4" | "9p" | "afs");
+            let all = fsx::mounts_in(&table);
+            let clouds = crate::mochi::cloud_places();
+            let mounts_of = |slow: bool| -> Vec<(PathBuf, String, u64, u64)> {
+                all.iter()
+                    .map(|m| {
+                        let (t, f) = if slow || !remote(m) { fsx::disk_space(&m.path).unwrap_or((0, 0)) } else { (0, 0) };
+                        let label = clouds.iter().find(|c| c.1 == m.path).map_or_else(|| tab::volume_label(&m.device, &m.path), |c| c.0.clone());
+                        (m.path.clone(), label, t, f)
+                    })
+                    .collect()
+            };
             // Every recent that still exists (the sidebar shows 10; GoTo searches them all).
             let recents: Vec<PathBuf> = recent_in.into_iter().filter(|p| p.is_dir()).collect();
             let mut files = std::collections::HashSet::new();
@@ -240,7 +254,12 @@ pub fn refresh(app: &App, ctx: &egui::Context) {
                 }
                 marks.insert(b.clone(), (exists, link));
             }
-            let _ = tx.send(Snapshot { mounts, recents, places: places(), marks, files, drives, net });
+            let places = places();
+            let _ = tx.send(Snapshot { mounts: mounts_of(false), recents: recents.clone(), places: places.clone(), marks: marks.clone(), files: files.clone(), drives: None, net: None });
+            ctx.request_repaint();
+            let drives = tools.as_ref().map(crate::drives::list).unwrap_or_default();
+            let net = tools.as_ref().filter(|t| t.has("gio")).map(crate::network::places).unwrap_or_default();
+            let _ = tx.send(Snapshot { mounts: mounts_of(true), recents, places, marks, files, drives: Some(drives), net: Some(net) });
             ctx.request_repaint();
         });
         c.job = Some(rx);
@@ -251,6 +270,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     refresh(app, ui.ctx());
     let pal = app.pal;
     let current = app.panels.get(&app.active).map(|p| p.path()).unwrap_or_default();
+    let theme_name = app.cfg.theme;
     let font = FontId::proportional(app.cfg.font_size);
     let row_h = (app.cfg.font_size + 10.0 * app.cfg.spacing).round();
     let mut actions: Vec<Action> = vec![];
@@ -299,7 +319,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             // As tall as its text needs at larger font sizes, 26 points at least.
             let row_h = (ui.text_style_height(&egui::TextStyle::Body) + 8.0).max(26.0).round();
             let (r, _) = ui.allocate_exact_size(vec2(w, row_h), Sense::hover());
-            ui.painter().rect(r, CornerRadius::same(6), pal.bg, Stroke::new(1.0, if filter.is_empty() { pal.border } else { pal.accent.gamma_multiply(0.7) }), egui::StrokeKind::Inside);
+            // Mochi: a filled pill on the backdrop.
+            crate::mochi::pill(ui.painter(), r, crate::mochi::mix(pal.sidebar, pal.hover, 0.6));
             paint_glyph(ui.painter(), Rect::from_center_size(pos2(r.left() + 13.0, r.center().y), Vec2::splat(13.0)), Glyph::Search, if filter.is_empty() { pal.text_dim } else { pal.accent });
             // The text's capitals on the icon's middle (see `cap_nudge`).
             let nudge = crate::ui::cap_nudge(ui, &egui::TextStyle::Body.resolve(ui.style()));
@@ -368,17 +389,19 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             // The place you are in wears a quiet pill, a step off the sidebar, so it is found
             // at a glance without competing with the list's selection.
             let here = path == current.as_path();
-            let r2 = r.shrink2(vec2(6.0, 1.0));
+            // Mochi: pill items; the folder the active panel shows wears the accent.
+            let r2 = r.shrink2(vec2(10.0, 1.0));
             if here {
-                crate::kit::picked(ui.painter(), r2, 6, true, false, &pal);
+                crate::mochi::pill(ui.painter(), r2, pal.selected);
             } else if ctx_target.as_deref() == Some(path) {
-                ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::lift(&pal));
+                crate::mochi::pill(ui.painter(), r2, crate::kit::lift(&pal));
             } else if resp.hovered() {
-                ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::touch(&pal));
+                crate::mochi::pill(ui.painter(), r2, crate::kit::touch(&pal));
             }
-            let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
+            let ic = Rect::from_center_size(pos2(r.left() + 32.0, r.center().y), Vec2::splat(15.0));
             match glyph {
-                Some(g) => paint_glyph(ui.painter(), ic, g, if here { crate::kit::on_lift(&pal) } else { pal.text_dim }),
+                // Mochi: each place in its own colour, on a soft tile.
+                Some(g) => crate::mochi::place_icon(ui.painter(), ic, g, theme_name, &pal, if here { pal.accent } else { pal.text_dim }),
                 None => {
                     // A folder with a colour label is drawn in it, as in the listing.
                     let label = crate::tags::get(path, |t| t.iter().find_map(|x| crate::tags::color_of(x))).flatten();
@@ -436,89 +459,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 actions.push(Action::Open(crate::ctxmenu::build_place(active, path.to_path_buf(), bookmark, drive, network, pos)));
             }
         };
-        let show_ext = app.cfg.show_ext;
-        let (files, marks) = CACHE.with(|c| {
-            let c = c.borrow();
-            (c.files.clone(), c.marks.clone())
-        });
-        let name_of = |p: &Path| -> String {
-            if tab::is_computer(p) {
-                return "Computer".into();
-            }
-            if !show_ext && files.contains(p) {
-                if let Some(stem) = p.file_stem() {
-                    return stem.to_string_lossy().into_owned();
-                }
-            }
-            p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
-        };
-
-        // ---------------- recents
-        let recents: Vec<PathBuf> = CACHE.with(|c| c.borrow().recents.iter().take(10).cloned().collect());
-        if section(ui, app, "recents", "Recents", Some(recents.len())) {
-            for p in recents.iter() {
-                let name = name_of(p);
-                if !matches(&name) {
-                    continue;
-                }
-                let resp = item(ui, &name, None, p, false, false);
-                nav(&mut actions, &resp, p);
-                drop_files(ui, &app.drag, &mut actions, &resp, p);
-                ctx_menu(&resp, &mut actions, p, false);
-            }
-        }
-        ui.add_space(6.0);
-        // ---------------- bookmarks
-        let hdr_top = ui.cursor().top();
-        let nbm = app.ud.bookmarks.len();
-        let open = section(ui, app, "bookmarks", "Bookmarks", Some(nbm));
-        let hdr = Rect::from_min_size(pos2(ui.min_rect().left(), hdr_top), vec2(width, 26.0));
-        // Dropping folders on the header bookmarks them.
-        if let Some(Drag::Files { paths, .. }) = &app.drag {
-            if pointer.map(|p| hdr.contains(p)).unwrap_or(false) {
-                ui.painter().rect_stroke(hdr.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), Stroke::new(1.5, pal.accent), egui::StrokeKind::Inside);
-                if released {
-                    for p in paths.iter().filter(|p| p.is_dir()) {
-                        actions.push(Action::BookmarkAdd(p.clone()));
-                    }
-                }
-            }
-        }
-        if open {
-            let bms = app.ud.bookmarks.clone();
-            let mut drop_line: Option<(usize, f32)> = None;
-            for (i, b) in bms.iter().enumerate() {
-                let name = name_of(b);
-                if !matches(&name) {
-                    continue;
-                }
-                // Status comes from the background refresh (unknown yet = assume fine).
-                let (exists, is_link) = marks.get(b).copied().unwrap_or((true, false));
-                let resp = item(ui, &name, None, b, !exists, is_link);
-                nav(&mut actions, &resp, b);
-                drop_files(ui, &app.drag, &mut actions, &resp, b);
-                ctx_menu(&resp, &mut actions, b, true);
-                if resp.drag_started() && app.drag.is_none() {
-                    app.drag = Some(Drag::Bookmark { idx: i });
-                }
-                if let (Some(Drag::Bookmark { idx }), Some(p)) = (&app.drag, pointer) {
-                    if resp.rect.contains(p) && *idx != i {
-                        let before = p.y < resp.rect.center().y;
-                        drop_line = Some((if before { i } else { i + 1 }, if before { resp.rect.top() } else { resp.rect.bottom() }));
-                    }
-                }
-            }
-            if let Some((to, y)) = drop_line {
-                ui.painter().line_segment([pos2(12.0, y), pos2(width - 8.0, y)], Stroke::new(2.0, pal.accent));
-                if released {
-                    if let Some(Drag::Bookmark { idx }) = app.drag {
-                        let to = if to > idx { to - 1 } else { to };
-                        actions.push(Action::BookmarkMove { from: idx, to });
-                    }
-                }
-            }
-        }
-        ui.add_space(6.0);
+        // Mochi: no Recents section.
+        // Mochi: no Bookmarks section.
         // ---------------- smart folders, once there are any
         let nsmart = app.ud.smart.len();
         if !app.ud.smart.is_empty() && section(ui, app, "smart", "Smart Folders", Some(nsmart)) {
@@ -645,7 +587,12 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, if two { r.top() + row_h / 2.0 - 1.0 } else { r.center().y }), Vec2::splat(15.0));
                 let crypt = drive.map_or(&crate::drives::Crypt::Plain, |d| &d.crypt);
                 let icol = if sel { crate::kit::on_lift(&pal) } else if mounted { pal.text_dim } else { pal.text_dim.gamma_multiply(0.6) };
-                crate::ui::paint_drive(ui.painter(), ic, drive.is_some_and(|d| d.removable), crypt, icol, face);
+                // Mochi: a cloud drive in its cloud tile.
+                if crate::mochi::cloud_name(p).is_some() {
+                    crate::mochi::place_icon(ui.painter(), ic, Glyph::Cloud, theme_name, &pal, icol);
+                } else {
+                    crate::ui::paint_drive(ui.painter(), ic, drive.is_some_and(|d| d.removable), crypt, icol, face);
+                }
                 // Room on the right for the eject button (or the spinner while busy).
                 let btn = Rect::from_center_size(pos2(r.right() - 20.0, ic.center().y), Vec2::splat(20.0));
                 let frac = if measured { (total - free) as f32 / *total as f32 } else { 0.0 };
@@ -784,7 +731,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 drop_files(ui, &app.drag, &mut actions, &resp, p);
                 ctx_menu(&resp, &mut actions, p, false);
                 // What changed lately, all over the home folder, right under it.
-                if *g == Glyph::Home && matches("Timeline") {
+                // Mochi: no Timeline.
+                if false && *g == Glyph::Home && matches("Timeline") {
                     let key = crate::ctxmenu::smart_key(crate::smart::TIMELINE);
                     let resp = item(ui, "Timeline", Some(Glyph::Clock), &key, false, false);
                     let id = crate::smart::TIMELINE;

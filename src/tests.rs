@@ -1047,7 +1047,8 @@ fn fast_name_sort_orders_exactly_like_natural_order() {
         t.rebuild(&ctx);
         assert!(t.view.len() > if filter.is_empty() { 120 } else { 10 }, "{} items", t.view.len());
         let q = crate::fuzzy::Query::new(filter);
-        let tier = |e: &crate::fsx::Entry| crate::fuzzy::score(&q, e.lname()).map(|s| (s + 40) / 25).unwrap_or(0);
+        // Mochi: ranked by `mochi::search_score`.
+        let tier = |e: &crate::fsx::Entry| crate::mochi::search_score(&q, e).map(|s| s / 25).unwrap_or(0);
         for w in t.view.windows(2) {
             let (a, b) = (&t.entries[w[0] as usize], &t.entries[w[1] as usize]);
             if !filter.is_empty() && tier(a) != tier(b) {
@@ -1867,14 +1868,13 @@ fn window_icon_is_the_launcher_icon() {
     let (px, w, h) = crate::install::window_icon();
     assert_eq!((w, h), (64, 64));
     let at = |x: u32, y: u32| &px[((y * w + x) * 4) as usize..((y * w + x) * 4 + 4) as usize];
-    assert_eq!(at(0, 0)[3], 0, "clear around the folder");
-    assert_eq!(at(32, 2)[3], 0, "clear above the papers");
-    // The front paper, nearly white, stands out of the folder.
-    let paper = at(16, 15);
-    assert!(paper[3] > 250 && paper[0] > 200 && paper[0].abs_diff(paper[2]) < 12, "paper {paper:?}");
-    // The foot of the glass front is near black.
-    let glass = at(32, 51);
-    assert!(glass[3] > 240 && glass[0] < 60, "glass {glass:?}");
+    assert_eq!(at(0, 0)[3], 0, "rounded corner");
+    assert!(at(32, 60)[3] == 255 && at(32, 60)[0] < 40, "dark tile");
+    // Mochi: the folder's front (64, 78 of 128) is a pastel pink-mauve, its eye dark.
+    let c = at(32, 39);
+    assert!(c[0] > 190 && c[2] > 200, "pastel folder {c:?}");
+    let e = at(24, 39);
+    assert!(e[0] < 60 && e[1] < 60, "eye {e:?}");
     if let Some(d) = std::env::var_os("MAIA_ICON_DUMP") {
         let f = std::fs::File::create(std::path::Path::new(&d).join("window-icon.png")).unwrap();
         let mut e = png::Encoder::new(f, w, h);
@@ -1885,15 +1885,14 @@ fn window_icon_is_the_launcher_icon() {
 
 #[test]
 fn installing_the_icon_replaces_the_old_svg() {
-    use crate::install::{ICON_PNG, icon_in, old_icon_in, place_icon};
+    // Mochi: its icon stays an SVG; a PNG of the same name is the one taken away.
+    use crate::install::{ICON_SVG, icon_in, old_icon_in, place_icon};
+    let ICON_PNG = ICON_SVG.as_bytes();
     let d = tmpdir("hicolor");
-    // What an install of 0.4 left behind.
-    touch(&old_icon_in(&d), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+    touch(&old_icon_in(&d), "png");
     assert!(place_icon(&d).unwrap());
-    assert!(!old_icon_in(&d).exists(), "a scalable icon would still be picked first");
+    assert!(!old_icon_in(&d).exists(), "a second icon would compete");
     assert_eq!(std::fs::read(icon_in(&d)).unwrap(), ICON_PNG);
-    let png = crate::imgdec::decode_bytes(&std::fs::read(icon_in(&d)).unwrap()).unwrap();
-    assert_eq!((png.w, png.h), (256, 256), "the size its folder names");
     // An up-to-date icon is left alone, so starting Maia doesn't make launchers reload it.
     let t = std::fs::metadata(icon_in(&d)).unwrap().modified().unwrap();
     assert!(!place_icon(&d).unwrap());
@@ -3956,7 +3955,9 @@ fn every_option_has_one_section() {
         Opt::CheckCopies => 64,
         Opt::Picker => 65,
     };
-    let numbered: Vec<usize> = (0..59).chain([61, 62, 63, 64, 65]).collect();
+    // Mochi leaves out the three recents options (20, 21, 22) and Character keys (40):
+    // typing always jumps to a name.
+    let numbered: Vec<usize> = (0..59).chain([61, 62, 63, 64, 65]).filter(|i| !(20..=22).contains(i) && *i != 40).collect();
     let mut seen = vec![0; 66];
     for o in OPTS {
         seen[index(o.0)] += 1;
@@ -4024,7 +4025,7 @@ fn option_search_spans_sections() {
     assert!(sections("font").is_superset(&[Section::Appearance, Section::Preview].into_iter().collect()));
     // A section or group name finds what is in it.
     assert!(find_options("thumbnails").iter().any(|&i| OPTS[i].0 == Opt::ThumbFill));
-    assert!(find_options("recents").iter().any(|&i| OPTS[i].0 == Opt::TrackRecents));
+    assert!(!find_options("recents").iter().any(|&i| OPTS[i].0 == Opt::TrackRecents), "Mochi keeps no recents");
     assert_eq!(Section::Appearance.step(-1), Section::System, "sections wrap");
     assert_eq!(Section::System.step(1), Section::Appearance);
     assert_eq!(Section::Files.step(1), Section::Mouse);
@@ -9393,6 +9394,66 @@ fn terminal_answers_and_modes() {
 }
 
 #[test]
+fn terminal_serves_claude_code() {
+    // Mochi: Claude Code runs full screen with the mouse (SGR): the wheel is reported, not
+    // turned into arrow keys, which it reads as going back through earlier prompts.
+    let t = vt(80, 24, b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
+    assert_eq!(t.screen.report(crate::vt::Mouse::Wheel(true), 4, 2, (false, false, false)).as_deref(), Some(&b"\x1b[<64;5;3M"[..]));
+    // Ctrl+Backspace deletes a word (ESC DEL, as Alt+Backspace), not one character.
+    let mut out = vec![];
+    crate::terminal::key_bytes(egui::Key::Backspace, egui::Modifiers::CTRL, false, &mut out);
+    assert_eq!(out, b"\x1b\x7f");
+}
+
+#[test]
+fn terminal_shows_kitty_pictures() {
+    // Mochi: fastfetch's logo: 4×2 RGBA pixels, zlib, base64 in two chunks split across
+    // reads, then the cursor moves it makes to print beside the picture.
+    use std::io::Write as _;
+    let px: Vec<u8> = (0..4 * 2 * 4).map(|i| i as u8).collect();
+    let mut z = flate2::write::ZlibEncoder::new(vec![], flate2::Compression::default());
+    z.write_all(&px).unwrap();
+    let b64 = {
+        const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let d = z.finish().unwrap();
+        let mut s = String::new();
+        for c in d.chunks(3) {
+            let n = c.iter().enumerate().fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+            for i in 0..=c.len() {
+                s.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+            }
+            s.push_str(&"=".repeat(3 - c.len()));
+        }
+        s
+    };
+    let (a, b) = b64.split_at(b64.len() / 2);
+    let mut t = vt(20, 6, b"");
+    t.screen.cell_px = (2.0, 1.0);
+    t.feed(b"\r\n\x1b_Ga=T,f=32,s=4,v=2,o=z,m=1;");
+    t.feed(a.as_bytes());
+    t.feed(b"\x1b\\\x1b_Gm=0;");
+    t.feed(b.as_bytes());
+    t.feed(b"\x1b");
+    t.feed(b"\\\x1b[1G\x1b[2Aok");
+    let s = &t.screen;
+    assert_eq!(s.images.len(), 1);
+    let im = &s.images[0];
+    assert_eq!((im.line, im.col, im.span, im.size), (1, 0, (2.0, 2.0), [4, 2]));
+    assert_eq!(&im.rgba[..], &px[..]);
+    // The cursor went to the picture's last row, past it; two up is the row above it.
+    assert_eq!(s.row_text(0), "ok");
+    // Nothing of the picture's bytes was printed.
+    assert_eq!((1..6).map(|y| s.row_text(y)).collect::<String>(), "");
+    // Clearing the screen takes the picture with it.
+    t.feed(b"\x1b[H\x1b[2J");
+    assert!(t.screen.images.is_empty());
+    // The pixel size is told to programs that ask.
+    t.screen.cell_px = (9.0, 20.0);
+    t.feed(b"\x1b[16t\x1b[14t");
+    assert_eq!(std::mem::take(&mut t.screen.replies), b"\x1b[6;20;9t\x1b[4;120;180t");
+}
+
+#[test]
 fn terminal_scrollback_is_bounded() {
     let mut t = vt(10, 2, b"");
     for i in 0..6000 {
@@ -10771,17 +10832,18 @@ fn picker_filters_let_through_what_the_app_asked() {
 /// found) and taken away again. All in temporary folders, never the real home.
 #[test]
 fn picker_routing_merges_and_restores_portals_conf() {
+    // Mochi: the portal routes to "mochi", the name mochi.sh installs.
     use crate::portal::{IFACE, Places, conf_set, is_on, turn_off, turn_on};
     // The text alone.
-    let (t, prev) = conf_set("# mine\n[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.ScreenCast=hyprland\n\n[other]\nx=1\n", IFACE, Some("maia"));
-    assert_eq!(t, "# mine\n[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.ScreenCast=hyprland\norg.freedesktop.impl.portal.FileChooser=maia\n\n[other]\nx=1\n");
+    let (t, prev) = conf_set("# mine\n[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.ScreenCast=hyprland\n\n[other]\nx=1\n", IFACE, Some("mochi"));
+    assert_eq!(t, "# mine\n[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.ScreenCast=hyprland\norg.freedesktop.impl.portal.FileChooser=mochi\n\n[other]\nx=1\n");
     assert_eq!(prev, None);
     let (t2, prev) = conf_set(&t, IFACE, Some("kde"));
-    assert_eq!((prev.as_deref(), t2.matches("FileChooser").count()), (Some("maia"), 1), "replaced in place");
+    assert_eq!((prev.as_deref(), t2.matches("FileChooser").count()), (Some("mochi"), 1), "replaced in place");
     let (t3, _) = conf_set(&t2, IFACE, None);
     assert!(!t3.contains("FileChooser") && t3.contains("ScreenCast=hyprland") && t3.contains("[other]\nx=1"));
-    assert_eq!(conf_set("", IFACE, Some("maia")).0, "[preferred]\norg.freedesktop.impl.portal.FileChooser=maia\n");
-    assert_eq!(conf_set("[other]\na=b\n", IFACE, Some("maia")).0, "[other]\na=b\n\n[preferred]\norg.freedesktop.impl.portal.FileChooser=maia\n");
+    assert_eq!(conf_set("", IFACE, Some("mochi")).0, "[preferred]\norg.freedesktop.impl.portal.FileChooser=mochi\n");
+    assert_eq!(conf_set("[other]\na=b\n", IFACE, Some("mochi")).0, "[other]\na=b\n\n[preferred]\norg.freedesktop.impl.portal.FileChooser=mochi\n");
     assert_eq!(conf_set("[preferred]\n org.freedesktop.impl.portal.FileChooser = gtk \n", IFACE, None).1.as_deref(), Some("gtk"), "spaces around =");
     let d = tmpdir("picker-routing");
     let sys = d.join("usr/share/xdg-desktop-portal");
@@ -10792,9 +10854,9 @@ fn picker_routing_merges_and_restores_portals_conf() {
     assert!(!is_on(&pl));
     turn_on(&pl, exe).unwrap();
     let mine = d.join("config/xdg-desktop-portal/hyprland-portals.conf");
-    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.FileChooser=maia\n");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.FileChooser=mochi\n");
     assert_eq!(std::fs::read_to_string(pl.portal_file()).unwrap(), crate::portal::PORTAL_FILE);
-    assert_eq!(std::fs::read_to_string(pl.service_file()).unwrap(), "[D-BUS Service]\nName=org.freedesktop.impl.portal.desktop.maia\nExec=/opt/maia/bin/maia --portal\n");
+    assert_eq!(std::fs::read_to_string(pl.service_file()).unwrap(), "[D-BUS Service]\nName=org.freedesktop.impl.portal.desktop.mochi\nExec=/opt/maia/bin/maia --portal\n");
     assert!(is_on(&pl));
     turn_on(&pl, exe).unwrap();
     turn_off(&pl).unwrap();
@@ -10807,7 +10869,7 @@ fn picker_routing_merges_and_restores_portals_conf() {
     touch(&generic, theirs);
     turn_on(&pl, exe).unwrap();
     assert!(!mine.exists(), "the file read now is the one changed");
-    assert_eq!(std::fs::read_to_string(&generic).unwrap(), "[preferred]\n# my choice\ndefault=gtk\norg.freedesktop.impl.portal.FileChooser=maia\n");
+    assert_eq!(std::fs::read_to_string(&generic).unwrap(), "[preferred]\n# my choice\ndefault=gtk\norg.freedesktop.impl.portal.FileChooser=mochi\n");
     // Turned on twice, the first previous value is the one kept.
     turn_on(&pl, exe).unwrap();
     // A line the user added meanwhile stays.
@@ -10826,7 +10888,7 @@ fn picker_routing_merges_and_restores_portals_conf() {
     std::fs::remove_file(&mine).unwrap();
     let pl = Places { merges: true, ..pl };
     turn_on(&pl, exe).unwrap();
-    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=maia\n");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=mochi\n");
     assert!(is_on(&pl));
     turn_off(&pl).unwrap();
     assert!(!mine.exists() && !is_on(&pl));
@@ -12326,7 +12388,7 @@ fn compress_jobs_report_progress_and_cancel() {
     touch(&d.join("a/log.txt"), &words);
     touch(&d.join("b/deep/other.txt"), "from another folder");
     let run = |srcs: Vec<PathBuf>, out: &Path, level: Level, pw: Option<&str>| {
-        let j = ops::spawn(1, OpKind::Compress { srcs, out: out.to_path_buf(), password: pw.map(|p| crate::archive::Secret(p.into())), level }, ctx.clone());
+        let j = ops::spawn(1, OpKind::Compress { srcs, out: out.to_path_buf(), password: pw.map(|p| crate::archive::Secret(p.into())), level, parts: None }, ctx.clone());
         let start = Instant::now();
         while !j.progress.lock().unwrap().finished {
             assert!(start.elapsed() < Duration::from_secs(60), "compress timed out");
@@ -12371,7 +12433,7 @@ fn compress_jobs_report_progress_and_cancel() {
     }
     std::fs::write(d.join("noise.bin"), &noise).unwrap();
     let out = d.join("noise.tar.xz");
-    let j = ops::spawn(2, OpKind::Compress { srcs: vec![d.join("noise.bin")], out: out.clone(), password: None, level: Level::Smallest }, ctx.clone());
+    let j = ops::spawn(2, OpKind::Compress { srcs: vec![d.join("noise.bin")], out: out.clone(), password: None, level: Level::Smallest, parts: None }, ctx.clone());
     let done = || j.progress.lock().unwrap().done_bytes;
     let start = Instant::now();
     while done() < 4 << 20 {
@@ -14798,4 +14860,73 @@ fn whats_new_lights_drift_and_slide_with_the_pages() {
     };
     let (first, last) = (frame(&a, 6.0, -0.15), frame(&a, 6.0, 0.15));
     assert!(middle(&last) > middle(&first) + 10.0, "the last page's lights stand further right: {} against {}", middle(&last), middle(&first));
+}
+
+/// Mochi: Compress In Parts cuts the archive into numbered parts of the size asked,
+/// whose bytes in order are the whole archive.
+#[test]
+fn compress_in_parts() {
+    use crate::archwrite::Level;
+    if !crate::archive::available() {
+        return;
+    }
+    let ctx = egui::Context::default();
+    let d = tmpdir("compressparts");
+    let mut noise = vec![0u8; 3 << 20];
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
+    for b in noise.iter_mut() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *b = x as u8;
+    }
+    std::fs::write(d.join("noise.bin"), &noise).unwrap();
+    let out = d.join("noise.zip");
+    let j = ops::spawn(1, OpKind::Compress { srcs: vec![d.join("noise.bin")], out: out.clone(), password: None, level: Level::Fast, parts: Some(1 << 20) }, ctx.clone());
+    wait_job(&j);
+    assert!(j.progress.lock().unwrap().errors.is_empty(), "{:?}", j.progress.lock().unwrap().errors);
+    assert!(!out.exists(), "the whole archive gives way to its parts");
+    let parts: Vec<PathBuf> = (1..=5).map(|i| d.join(format!("noise.zip.{i:03}"))).collect();
+    assert!(parts[..4].iter().all(|p| p.is_file()) && !parts[4].exists(), "three full parts and a short fourth: {:?}", std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>());
+    for p in &parts[..3] {
+        assert_eq!(std::fs::metadata(p).unwrap().len(), 1 << 20, "full parts of 1 MB");
+    }
+    assert!(std::fs::metadata(&parts[3]).unwrap().len() < 1 << 20, "the last part holds the rest");
+    let mut whole = vec![];
+    for p in (1..).map(|i| d.join(format!("noise.zip.{i:03}"))).take_while(|p| p.exists()) {
+        whole.extend(std::fs::read(&p).unwrap());
+    }
+    assert!(whole.len() > 3 << 20 && whole.starts_with(b"PK"), "the parts in order are the zip");
+    let joined = d.join("joined.zip");
+    std::fs::write(&joined, &whole).unwrap();
+    assert!(archive_contents(&joined).contains_key("noise.bin"), "and it opens");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Mochi: a search through the subfolders lists the folders it finds, the whole name before
+/// a name holding it, then the files in a matching folder; letters scattered over a path
+/// are no match.
+#[test]
+fn search_finds_folders_and_ranks_whole_words() {
+    let d = tmpdir("mochisearch");
+    for f in ["-home-bardia-Desktop-AI-FileManager/s1.jsonl", "FileManager/notes.md", "other/Final-image-lens-example-Manager.txt", "other/filemanager-old.zip", "other/File-Manager-v2.txt", "x/y.txt"] {
+        let p = d.join(f);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"x").unwrap();
+    }
+    let stats = HashMap::new();
+    let mut t = Tab::new(41, d.clone(), ViewSettings::default(), egui::Context::default());
+    pump(&mut t, &stats);
+    t.filter = "FileManager".into();
+    t.set_flatten(true);
+    pump(&mut t, &stats);
+    let found: Vec<String> = t.view.iter().map(|&i| t.entries[i as usize].rel().map(|r| r.into_owned()).unwrap_or_default()).collect();
+    assert_eq!(found, ["FileManager", "filemanager-old.zip", "-home-bardia-Desktop-AI-FileManager", "notes.md", "s1.jsonl", "File-Manager-v2.txt"].iter().map(|n| found.iter().find(|f| f.ends_with(n)).cloned().unwrap_or_else(|| format!("missing {n}"))).collect::<Vec<_>>());
+    assert!(!found.iter().any(|f| f.contains("Final-image")), "scattered letters are no match: {found:?}");
+    // Expand without a search still lists files only.
+    t.filter.clear();
+    t.dirty = true;
+    pump(&mut t, &stats);
+    assert!(t.view.iter().all(|&i| !t.entries[i as usize].is_dir));
+    let _ = std::fs::remove_dir_all(&d);
 }

@@ -136,6 +136,7 @@ pub fn paint_view_glyph(p: &egui::Painter, r: Rect, mode: Mode, col: Color32) {
 /// Single-line galley elided with "…" to `width`.
 /// Like `elided`, but keeps the end ("…/parent/folder"): for paths, where the tail matters.
 pub fn elided_tail(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) -> Arc<Galley> {
+    let text = &*crate::mochi::visual(text); // Mochi: Persian joined and right to left
     let full = ui.painter().layout_no_wrap(text.to_string(), font.clone(), color);
     if full.size().x <= width {
         return full;
@@ -157,7 +158,7 @@ pub fn elided_tail(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32
 }
 
 pub fn elided(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) -> Arc<Galley> {
-    let mut job = LayoutJob::simple_singleline(text.to_string(), font, color);
+    let mut job = LayoutJob::simple_singleline(crate::mochi::visual(text).into_owned(), font, color);
     job.wrap = egui::text::TextWrapping { max_width: width.max(8.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     ui.fonts_mut(|f| f.layout_job(job))
 }
@@ -368,7 +369,11 @@ pub fn display_name(e: &Entry, cfg: &Config) -> String {
 /// Several rows are set by `wrap_name`, which knows where a name may break.
 fn name_job(ui: &Ui, name: &str, suffix: Option<&str>, q: &fuzzy::Query, font: &FontId, col: Color32, dim: Color32, accent: Color32, width: f32, rows: usize) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let hits: HashSet<usize> = if q.is_empty() { HashSet::new() } else { fuzzy::positions(q, name).map(|(_, p)| p.into_iter().collect()).unwrap_or_default() };
+    // Mochi: Persian joined and right to left; its match highlights would land elsewhere.
+    let shown = crate::mochi::visual(name);
+    let rtl = shown != name;
+    let name = &*shown;
+    let hits: HashSet<usize> = if rtl || q.is_empty() { HashSet::new() } else { fuzzy::positions(q, name).map(|(_, p)| p.into_iter().collect()).unwrap_or_default() };
     let fmt = |c: Color32| egui::TextFormat { font_id: font.clone(), color: c, ..Default::default() };
     let wrapped = (rows > 1).then(|| wrap_name(ui, name, font, width.max(8.0), rows));
     if hits.is_empty() {
@@ -545,7 +550,8 @@ fn append_match(job: &mut LayoutJob, line: &str, needle: &str, font: &FontId, di
 /// Row pitch: generous leading around the text, scaled by the Spacing option
 /// (12 px text at default spacing gives ~24.5 px rows).
 pub fn row_height(cfg: &Config) -> f32 {
-    (cfg.font_size * 1.35 + 8.3 * cfg.spacing).round()
+    // Mochi: airier rows (15 px text at Spacing 1.6: 39 px).
+    (cfg.font_size * 1.4 + 11.0 * cfg.spacing).round()
 }
 
 pub fn listing(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
@@ -949,13 +955,41 @@ pub(crate) fn rename_field(ui: &mut Ui, rect: Rect, idx: u32, t: &mut Tab, env: 
         0.0
     };
     let rect = rect.translate(vec2(jolt, 0.0));
-    let box_r = Rect::from_min_max(pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 3.0), pos2(rect.right(), rect.center().y + galley.size().y / 2.0 + 3.0));
-    if bad {
-        ui.painter().rect_stroke(box_r, CornerRadius::same(4), Stroke::new(1.0, pal.danger), StrokeKind::Inside);
-    }
-    let origin = pos2(box_r.left(), box_r.center().y - galley.size().y / 2.0);
+    // Mochi: a long name widens the field over the columns beside it, up to the list's
+    // edge, and past that the text scrolls to keep the caret in sight: every character
+    // can be reached and seen.
     let clip = ui.clip_rect();
-    let painter = ui.painter().with_clip_rect(box_r.intersect(clip));
+    let want_right = rect.left() + galley.size().x + 14.0;
+    let right = want_right.max(rect.right()).min((clip.right() - 6.0).max(rect.right()));
+    let box_r = Rect::from_min_max(pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 3.0), pos2(right, rect.center().y + galley.size().y / 2.0 + 3.0));
+    let wide = right > rect.right() + 0.5;
+    // Over the other columns it is a field of its own, drawn above them.
+    let painter = if wide {
+        let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, Id::new(("rename layer", t.id)))).with_clip_rect(clip);
+        let fr = box_r.expand2(vec2(3.0, 1.0));
+        p.rect(fr, CornerRadius::same(6), pal.raised, Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Outside);
+        p
+    } else {
+        ui.painter().clone()
+    };
+    if bad {
+        painter.rect_stroke(box_r, CornerRadius::same(4), Stroke::new(1.0, pal.danger), StrokeKind::Inside);
+    }
+    // The caret kept in view: the text slides left as it moves past the field's end.
+    let view_w = (box_r.width() - 8.0).max(8.0);
+    let caret_x = galley.pos_from_cursor(egui::text::CCursor::new(f.caret)).min.x;
+    let off_id = Id::new(("rename scroll", t.id, idx));
+    let mut off: f32 = ui.ctx().data(|d| d.get_temp(off_id)).unwrap_or(0.0);
+    if caret_x - off > view_w {
+        off = caret_x - view_w;
+    }
+    if caret_x - off < 0.0 {
+        off = caret_x;
+    }
+    off = off.clamp(0.0, (galley.size().x + 2.0 - view_w).max(0.0));
+    ui.ctx().data_mut(|d| d.insert_temp(off_id, off));
+    let origin = pos2(box_r.left() + 2.0 - off, box_r.center().y - galley.size().y / 2.0);
+    let painter = painter.with_clip_rect(box_r.intersect(clip));
     let (a, b) = f.selection();
     if a != b {
         let xa = galley.pos_from_cursor(egui::text::CCursor::new(a)).min.x;
@@ -966,8 +1000,7 @@ pub(crate) fn rename_field(ui: &mut Ui, rect: Rect, idx: u32, t: &mut Tab, env: 
     // Blinking caret
     let blink = (ui.input(|i| i.time) * 2.0) as i64 % 2 == 0;
     if blink {
-        let xc = galley.pos_from_cursor(egui::text::CCursor::new(f.caret)).min.x;
-        painter.line_segment([pos2(origin.x + xc, origin.y), pos2(origin.x + xc, origin.y + galley.size().y)], Stroke::new(1.5, pal.accent));
+        painter.line_segment([pos2(origin.x + caret_x, origin.y), pos2(origin.x + caret_x, origin.y + galley.size().y)], Stroke::new(1.5, pal.accent));
     }
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
     let resp = ui.interact(box_r, Id::new(("rename", t.id, idx)), Sense::click_and_drag());
@@ -1081,10 +1114,11 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
     let pal = *env.pal;
     let row_h = row_height(env.cfg);
     // As tall as the inspector's toolbar beside it, so their lines run on as one.
-    let header_h = 30.0;
+    let header_h = 34.0;
     let font = FontId::proportional(env.cfg.font_size);
-    let small = FontId::proportional(env.cfg.font_size - 1.0);
-    let pad = 10.0;
+    // Mochi: the columns after the name are a size down and quieter, so names lead.
+    let small = FontId::proportional(env.cfg.font_size - 2.0);
+    let pad = 14.0;
     let mut cols = t.settings.columns.clone();
     if !cols.iter().any(|(c, _)| *c == Column::Name) {
         cols.insert(0, (Column::Name, 300.0));
@@ -1216,13 +1250,11 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                         t.cursor_screen_pos = Some(pos2(rr.left() + 40.0, rr.bottom()));
                     }
                     let drop = drop_target(ui, rr, &e, env);
-                    // Stripes take a row's own shape, so a lifted row sits among them as one.
-                    if env.cfg.alt_rows && ri % 2 == 1 && !selected {
-                        ui.painter().rect_filled(rr.shrink2(vec2(3.0, 0.5)), CornerRadius::same(6), pal.alt);
-                    }
+                    // Mochi: no stripes; spacing separates the rows.
+                    let _ = ri;
                     // The item being renamed drops its highlight; the others fade back.
                     let editing = rename_focus(ui, rr, idx, t, env);
-                    paint_item_bg(ui.painter(), rr.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+                    paint_item_bg(ui.painter(), rr.shrink2(vec2(6.0, 1.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 10);
                     if env.cut.contains(&e.path) {
                         paint_ants(ui, rr.shrink2(vec2(4.0, 1.5)), env);
                     }
@@ -1253,7 +1285,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     }
                                     x += 15.0;
                                 }
-                                let ic = Rect::from_min_size(pos2(x, cell.center().y - 8.0), Vec2::splat(16.0));
+                                let ic = Rect::from_min_size(pos2(x, cell.center().y - 10.0), Vec2::splat(20.0));
                                 t.item_rects.push((idx, ic));
                                 let cat = theme::categorize(&e.ext(), e.is_dir, e.is_executable());
                                 let boxed = !computer && item_checkbox(ui, ic.shrink(1.0), idx, ui.rect_contains_pointer(rr), t, env);
@@ -1269,7 +1301,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     paint_entry_icon(&ip, ic, &e, cat, "");
                                 }
                                 crate::gitstatus::paint(ui.painter(), ic, git.as_deref(), &e.path, &pal);
-                                let name_r = Rect::from_min_max(pos2(ic.right() + 7.0, cell.top()), pos2(inner.right() - mark_room(&e, env), cell.bottom()));
+                                let name_r = Rect::from_min_max(pos2(ic.right() + 11.0, cell.top()), pos2(inner.right() - mark_room(&e, env), cell.bottom()));
                                 if !rename_field(ui, name_r, idx, t, env, &font) {
                                     let name = display_name(&e, env.cfg);
                                     let rel = e.rel();
@@ -1284,6 +1316,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     let g = ui.fonts_mut(|f| f.layout_job(job));
                                     let gw = g.size().x;
                                     ui.painter().galley(pos2(name_r.left(), cell.center().y - g.size().y / 2.0), g, pal.text);
+                                    full_name_tip(ui, name_r, &name, &font, (name_r.width() - room).max(24.0), (t.id, idx));
                                     if let Some(tg) = &tags {
                                         paint_tags(ui, name_r.left() + gw, cell.center().y, tg, &font, sub, ring);
                                     }
@@ -1335,8 +1368,9 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     Column::Accessed => fmt_date(e.accessed, env.cfg),
                                     Column::Deleted => fmt_date(t.trash_meta.get(&e.path).and_then(|m| m.1), env.cfg),
                                     Column::Original => t.trash_meta.get(&e.path).and_then(|m| m.0.parent()).map(|p| p.display().to_string()).unwrap_or_default(),
-                                    Column::Folders => if e.is_dir { env.stats.map.get(&e.path).map(|s| abbrev(s.folders)).unwrap_or_else(|| if e.is_link { "--".into() } else { String::new() }) } else { "--".into() },
-                                    Column::Files => if e.is_dir { env.stats.map.get(&e.path).map(|s| abbrev(s.files)).unwrap_or_else(|| if e.is_link { "--".into() } else { String::new() }) } else { "--".into() },
+                                    // Mochi: nothing rather than "--" where a count doesn't apply.
+                                    Column::Folders => if e.is_dir { env.stats.map.get(&e.path).map(|s| abbrev(s.folders)).unwrap_or_default() } else { String::new() },
+                                    Column::Files => if e.is_dir { env.stats.map.get(&e.path).map(|s| abbrev(s.files)).unwrap_or_default() } else { String::new() },
                                     Column::Permissions => fsx::fmt_mode(e.mode, e.is_dir),
                                     Column::Extension => e.ext().to_string(),
                                     Column::Taken => fmt_date(crate::facts::get(&e).and_then(|f| f.taken), env.cfg),
@@ -1348,7 +1382,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                 // Figures line up and their words ("KB", "Today") step back; a
                                 // cell with nothing to say ("--") steps back further.
                                 let g = if txt == "--" {
-                                    elided(ui, &txt, small.clone(), inner.width(), dimc(crate::kit::words_of(crate::kit::words_of(sub))))
+                                    elided(ui, "", small.clone(), inner.width(), dimc(sub)) // Mochi: no `--` placeholders
                                 } else if figures {
                                     self::figures(ui, &txt, small.clone(), inner.width(), dimc(sub), dimc(crate::kit::words_of(sub)))
                                 } else {
@@ -1394,7 +1428,8 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
     // Header (scrolls horizontally with the body).
     let header = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + header_h));
     let painter = ui.painter().with_clip_rect(header.intersect(ui.clip_rect()));
-    painter.line_segment([header.left_bottom(), header.right_bottom()], Stroke::new(1.0, pal.border));
+    // Mochi: no rules under or between the column titles until the pointer is on them.
+    let header_hot = ui.rect_contains_pointer(header);
     let mut x = header.left() + pad - t.hscroll;
     let mut new_widths: Option<(usize, f32)> = None;
     let mut toggle_col: Option<Column> = None;
@@ -1408,10 +1443,12 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
         let resp = ui.interact(cell.intersect(header), Id::new(("hdr", t.id, ci)), Sense::click());
         let active_sort = c.sort_key() == Some(t.settings.sort);
         if resp.hovered() {
-            painter.rect_filled(cell.shrink2(vec2(2.0, 3.0)), CornerRadius::same(6), crate::kit::touch(&pal));
+            painter.rect_filled(cell.shrink2(vec2(1.0, 3.0)), CornerRadius::same(10), crate::kit::touch(&pal));
         }
         // Thin separator at each column's right edge (the resize handle).
-        painter.line_segment([pos2(cell.right() - 0.5, cell.top() + 6.0), pos2(cell.right() - 0.5, cell.bottom() - 6.0)], Stroke::new(1.0, pal.border));
+        if header_hot {
+            painter.line_segment([pos2(cell.right() - 0.5, cell.top() + 8.0), pos2(cell.right() - 0.5, cell.bottom() - 8.0)], Stroke::new(1.0, pal.border));
+        }
         let label = c.title();
         let col = pal.text_dim;
         let g = elided(ui, label, head_font.clone(), w - 26.0, col);
@@ -1519,7 +1556,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
     let small = FontId::proportional(env.cfg.font_size - 1.5);
     let row_h = row_height(env.cfg);
     let n = t.view.len();
-    let body = rect.shrink2(vec2(6.0, 4.0));
+    let body = rect.shrink2(vec2(12.0, 8.0));
     // Geometry
     let (cell, cols, rows_per_col, horizontal) = match mode {
         Mode::List => {
@@ -1529,9 +1566,10 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
         Mode::Icons(s) => {
             let text_h = if s < 72.0 { env.cfg.font_size * 2.7 } else { env.cfg.font_size * 3.8 };
             // Cell widths: 66 / 122 / 178 for 48 / 96 / 144 icons.
-            let cw = s * 1.17 + 10.0;
+            // Mochi: wider and taller cells.
+            let cw = s * 1.3 + 18.0;
             let cols = ((body.width() / cw).floor() as usize).max(1);
-            (vec2(cw, s + text_h + 16.0), cols, 0, false)
+            (vec2(cw, s + text_h + 26.0), cols, 0, false)
         }
         Mode::Details | Mode::Tree | Mode::Columns | Mode::Stack => unreachable!(),
     };
@@ -1582,7 +1620,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                 ui.scroll_with_delta(vec2(dy, 0.0));
             }
         }
-        let (crect, bg) = ui.allocate_exact_size(content, Sense::click_and_drag());
+        let (crect, bg) = ui.allocate_exact_size(content.max(Vec2::ZERO), Sense::click_and_drag());
         let origin = crect.min;
         let viewport_screen = vp.translate(origin.to_vec2());
         background_clicks(ui, &bg, t, env);
@@ -1640,7 +1678,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
             match mode {
                 Mode::List => {
                     let editing = rename_focus(ui, r, idx, t, env);
-                    paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+                    paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 10);
                     if env.cut.contains(&e.path) {
                         paint_ants(ui, r.shrink2(vec2(3.0, 1.5)), env);
                     }
@@ -1672,7 +1710,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                     }
                 }
                 Mode::Icons(s) => {
-                    let rad = if env.cfg.round_corners { 8 } else { 0 };
+                    let rad = if env.cfg.round_corners { 18 } else { 0 };
                     let editing = rename_focus(ui, r, idx, t, env);
                     // A picked tile keeps its picture: a ring around it and a tint behind its
                     // name, no filled block. The keyboard's cursor is an outline of the whole
@@ -1740,12 +1778,15 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                         let w = (rr * 2.0 + 2.5) * dots.len() as f32 - 2.5;
                         paint_dots(ui.painter(), icon_r.right() - w, icon_r.top() + rr + 1.0, &dots, rr, pal.bg);
                     }
-                    let text_r = Rect::from_min_max(pos2(r.left() + 5.0, icon_r.bottom() + 5.0), pos2(r.right() - 5.0, r.bottom() - 3.0));
+                    // Mochi: the name a touch smaller and further from the icon, the size
+                    // under it small and quiet.
+                    let text_r = Rect::from_min_max(pos2(r.left() + 10.0, icon_r.bottom() + 9.0), pos2(r.right() - 10.0, r.bottom() - 6.0));
+                    let name_font = FontId::proportional(font.size - 1.0);
                     let name_line = Rect::from_min_size(text_r.min, vec2(text_r.width(), font.size + 6.0));
                     if !rename_field(ui, name_line, idx, t, env, &font) {
                         let rows = if s < 72.0 { 1 } else { 2 };
                         let (sub, acc, _) = sel_colors(&pal, false);
-                        let mut job = name_job(ui, &display_name(&e, env.cfg), None, q, &font, dimc(if picked { crate::kit::on_lift(&pal) } else { pal.text }), sub, acc, text_r.width(), rows);
+                        let mut job = name_job(ui, &display_name(&e, env.cfg), None, q, &name_font, dimc(if picked { crate::kit::on_lift(&pal) } else { pal.text }), sub, acc, text_r.width(), rows);
                         job.halign = egui::Align::Center;
                         let g = ui.fonts_mut(|f| f.layout_job(job));
                         let gh = g.size().y;
@@ -1754,11 +1795,12 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                             ui.painter().rect_filled(back, CornerRadius::same(5), crate::kit::lift(&pal));
                         }
                         ui.painter().galley(pos2(text_r.center().x, text_r.top()), g, pal.text);
+                        full_name_tip(ui, Rect::from_min_size(text_r.min, vec2(text_r.width(), gh)), &display_name(&e, env.cfg), &name_font, text_r.width() * rows as f32 * 0.92, (t.id, idx));
                         {
                             let size = entry_size_text(&e, t, env);
-                            let size = if size.is_empty() { "--".to_string() } else { size };
-                            if gh < text_r.height() - 8.0 {
-                                ui.painter().text(pos2(text_r.center().x, text_r.top() + gh + 1.0), Align2::CENTER_TOP, size, small.clone(), sub);
+                            let quiet = if selected && !editing { sub } else { crate::mochi::mix(sub, pal.panel, 0.3) };
+                            if gh < text_r.height() - 8.0 && size != "--" {
+                                ui.painter().text(pos2(text_r.center().x, text_r.top() + gh + 3.0), Align2::CENTER_TOP, size, FontId::proportional(font.size - 3.5), quiet);
                             }
                         }
                     }
@@ -2034,7 +2076,7 @@ fn own_column(ui: &mut Ui, cr: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Quer
             let drop = drop_target(ui, r, &e, env);
             let faded = env.cut.contains(&e.path) || unmounted(t, &e) || dim_ignored && crate::gitstatus::ignored(git.as_deref(), &e.path, &t.path);
             let editing = rename_focus(ui, r, idx, t, env);
-            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 10);
             crate::compare::paint(ui.painter(), r, &e.path, &pal);
             handle_item(ui, &resp, idx, t, env);
             let ic = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 8.0), Vec2::splat(16.0));
@@ -2094,7 +2136,7 @@ fn side_column(ui: &mut Ui, cr: Rect, col: &mut Tab, child: Option<u32>, env: &m
             if on {
                 crate::kit::picked(ui.painter(), r.shrink2(vec2(3.0, 0.5)), 6, false, false, env.pal);
             }
-            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), false, false, resp.hovered() && !on, drop, env, 6);
+            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), false, false, resp.hovered() && !on, drop, env, 10);
             let ic = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 8.0), Vec2::splat(16.0));
             let faded = env.cut.contains(&e.path);
             column_cells(ui, r, ic, e, env, &none, false, faded, true, git.as_deref());
@@ -2160,5 +2202,17 @@ fn side_column(ui: &mut Ui, cr: Rect, col: &mut Tab, child: Option<u32>, env: &m
         };
         let g = elided(ui, &msg, FontId::proportional(env.cfg.font_size - 1.0), (cr.width() - 24.0).max(30.0), env.pal.text_dim);
         ui.painter().galley(pos2(cr.center().x - g.size().x / 2.0, cr.top() + row_height(env.cfg) * 1.5), g, env.pal.text_dim);
+    }
+}
+
+/// Mochi: a name cut short (by the column, or the tile's two lines) shows whole in a
+/// tooltip while the pointer is on it.
+fn full_name_tip(ui: &Ui, r: Rect, name: &str, font: &FontId, room: f32, key: (u64, u32)) {
+    if !ui.rect_contains_pointer(r) || ui.ctx().dragged_id().is_some() {
+        return;
+    }
+    let w = ui.fonts_mut(|f| f.layout_no_wrap(name.to_string(), font.clone(), Color32::WHITE)).size().x;
+    if w > room + 0.5 {
+        ui.interact(r, Id::new(("full name", key)), Sense::hover()).on_hover_text(name);
     }
 }

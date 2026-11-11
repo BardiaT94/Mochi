@@ -27,7 +27,7 @@ pub fn socket_path() -> PathBuf {
     let uid = unsafe { libc::getuid() };
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     let display = std::env::var("WAYLAND_DISPLAY").or_else(|_| std::env::var("DISPLAY")).unwrap_or_default().replace('/', "_");
-    dir.join(format!("maia-{uid}-{display}.sock"))
+    dir.join(format!("{}-{uid}-{display}.sock", crate::mochi::BIN))
 }
 
 /// Hand `paths` to the Maia listening at `sock`. True when it took them.

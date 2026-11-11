@@ -290,8 +290,8 @@ impl Bus {
 
     /// The socket and the last serial used: for a service that reads on one thread and
     /// answers from others (the Open and Save dialog).
-    pub fn into_parts(self) -> (UnixStream, u32) {
-        (self.s, self.serial)
+    pub fn into_parts(self) -> (UnixStream, u32, Vec<Msg>) {
+        (self.s, self.serial, self.pending)
     }
 
     /// A connection over a socket already set up (tests).
@@ -495,7 +495,7 @@ pub fn set_service(on: bool, exe: &Path) -> std::io::Result<()> {
             std::fs::write(&p, want)?;
             reload();
         }
-    } else if std::fs::read_to_string(&p).is_ok_and(|t| t.contains("Exec=") && t.contains("maia")) {
+    } else if std::fs::read_to_string(&p).is_ok_and(|t| t.contains("Exec=") && t.contains(crate::mochi::BIN)) {
         std::fs::remove_file(&p)?;
         reload();
     }
@@ -510,7 +510,7 @@ fn reload() {
 
 /// The program the bus should start: the installed copy when there is one.
 pub fn exe() -> PathBuf {
-    let installed = dirs::executable_dir().unwrap_or_else(|| crate::fsx::home().join(".local/bin")).join("maia");
+    let installed = dirs::executable_dir().unwrap_or_else(|| crate::fsx::home().join(".local/bin")).join(crate::mochi::BIN);
     if installed.is_file() { installed } else { std::env::current_exe().unwrap_or(installed) }
 }
 

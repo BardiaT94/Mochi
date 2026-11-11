@@ -320,10 +320,28 @@ fn finish(app: &mut App, a: Answer, folder: Option<PathBuf>) {
     *ANSWER.lock().unwrap_or_else(|e| e.into_inner()) = Some((a.clone(), folder));
     p.done = Some(a);
     app.quit = true;
+    send_answer();
 }
 
 pub fn cancel(app: &mut App) {
     finish(app, Answer::cancelled(), None);
+}
+
+/// Where the answer goes: the backend's pipe, set by `maia --pick` (-1 once sent).
+static OUT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+pub fn answer_to(fd: i32) {
+    OUT.store(fd, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Write the answer and close the pipe, once: as soon as it is chosen, so the app is not
+/// kept waiting while the window and its threads shut down.
+pub fn send_answer() {
+    use std::os::fd::FromRawFd as _;
+    let fd = OUT.swap(-1, std::sync::atomic::Ordering::Relaxed);
+    if fd >= 0 {
+        write_answer(&mut unsafe { std::fs::File::from_raw_fd(fd) });
+    }
 }
 
 /// After the window closed: write the answer for the backend (cancelled when the window

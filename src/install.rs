@@ -3,20 +3,19 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A folder of dark frosted glass with papers standing in it. A PNG because the glass
-/// is a blur, which the SVG renderer doesn't draw.
-pub const ICON_PNG: &[u8] = include_bytes!("../assets/maia.png");
+/// Mochi: a soft folder in Catppuccin's pastels on a Mocha tile.
+pub const ICON_SVG: &str = include_str!("../assets/mochi.svg");
 
 fn local() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| crate::fsx::home().join(".local/share"))
 }
 
 fn bin_path() -> PathBuf {
-    dirs::executable_dir().unwrap_or_else(|| crate::fsx::home().join(".local/bin")).join("maia")
+    dirs::executable_dir().unwrap_or_else(|| crate::fsx::home().join(".local/bin")).join(crate::mochi::BIN)
 }
 
 fn desktop_path() -> PathBuf {
-    local().join("applications/io.github.yappologistic.Maia.desktop")
+    local().join(format!("applications/{}.desktop", crate::mochi::APP_ID))
 }
 
 fn hicolor() -> PathBuf {
@@ -24,13 +23,12 @@ fn hicolor() -> PathBuf {
 }
 
 pub fn icon_in(hicolor: &Path) -> PathBuf {
-    hicolor.join("256x256/apps/io.github.yappologistic.Maia.png")
+    hicolor.join(format!("scalable/apps/{}.svg", crate::mochi::APP_ID))
 }
 
-/// Where earlier versions put the icon. A scalable icon matches every size, so left
-/// beside the PNG it would go on being the one shown.
+/// Mochi: a PNG of the same name (Maia's kind of icon) would compete with the SVG.
 pub fn old_icon_in(hicolor: &Path) -> PathBuf {
-    hicolor.join("scalable/apps/io.github.yappologistic.Maia.svg")
+    hicolor.join(format!("256x256/apps/{}.png", crate::mochi::APP_ID))
 }
 
 /// Puts this build's icon under `hicolor` and takes away the old SVG. Writes nothing
@@ -38,14 +36,14 @@ pub fn old_icon_in(hicolor: &Path) -> PathBuf {
 pub fn place_icon(hicolor: &Path) -> std::io::Result<bool> {
     let old = std::fs::remove_file(old_icon_in(hicolor)).is_ok();
     let p = icon_in(hicolor);
-    if std::fs::read(&p).is_ok_and(|b| b == ICON_PNG) {
+    if std::fs::read(&p).is_ok_and(|b| b == ICON_SVG.as_bytes()) {
         return Ok(old);
     }
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d)?;
     }
-    let tmp = p.with_extension("png.new");
-    std::fs::write(&tmp, ICON_PNG)?;
+    let tmp = p.with_extension("svg.new");
+    std::fs::write(&tmp, ICON_SVG)?;
     std::fs::rename(&tmp, &p)?;
     // The icon theme spec's signal to rescan: an icon cache older than the theme
     // folder is not trusted.
@@ -94,12 +92,15 @@ pub fn install() -> Result<String, String> {
     place_icon(&hicolor()).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(desktop_path().parent().unwrap()).map_err(|e| e.to_string())?;
     let desktop = format!(
-        "[Desktop Entry]\nType=Application\nName=Maia\nGenericName=File Manager\nComment=Fast, keyboard-first file manager\nExec={} %U\nIcon=io.github.yappologistic.Maia\nTerminal=false\nCategories=System;FileTools;FileManager;\nMimeType=inode/directory;\nKeywords=files;folders;explorer;browser;\nStartupWMClass=io.github.yappologistic.Maia\nActions=new-window;\n\n[Desktop Action new-window]\nName=New Window\nExec={} --window \"{}\"\n",
+        "[Desktop Entry]\nType=Application\nName={name}\nGenericName=File Manager\nComment=Maia's file manager, redesigned in Catppuccin\nExec={} %U\nIcon={id}\nTerminal=false\nCategories=System;FileTools;FileManager;\nMimeType=inode/directory;\nKeywords=files;folders;explorer;browser;mochi;\nStartupWMClass={id}\nActions=new-window;\n\n[Desktop Action new-window]\nName=New Window\nExec={} --window \"{}\"\n",
         bin.display(),
         bin.display(),
-        crate::fsx::home().display()
+        crate::fsx::home().display(),
+        name = crate::mochi::NAME,
+        id = crate::mochi::APP_ID,
     );
     std::fs::write(desktop_path(), desktop).map_err(|e| e.to_string())?;
+    drop_old_id();
     let _ = Command::new("update-desktop-database").arg(local().join("applications")).status();
     // Running from elsewhere, this copy is still not the installed one; from there, it is.
     INSTALLED.store(if exe == bin { 2 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
@@ -111,7 +112,21 @@ pub fn install() -> Result<String, String> {
     })
 }
 
-pub const DESKTOP_ID: &str = "io.github.yappologistic.Maia.desktop";
+pub const DESKTOP_ID: &str = "io.github.bardiat94.Mochi.desktop";
+
+/// Mochi's id before it matched the GitHub account.
+const OLD_ID: &str = "io.github.bardia.Mochi";
+
+/// An install under the old id gives way: its launcher entry and icon go, and if it
+/// opened folders, the new entry does.
+fn drop_old_id() {
+    let _ = std::fs::remove_file(local().join(format!("applications/{OLD_ID}.desktop")));
+    let _ = std::fs::remove_file(hicolor().join(format!("scalable/apps/{OLD_ID}.svg")));
+    #[cfg(not(test))]
+    if current_default().as_deref() == Some(&format!("{OLD_ID}.desktop")) {
+        let _ = crate::mime::set_default(DESKTOP_ID, "inode/directory");
+    }
+}
 
 /// The desktop's file manager: the first `inode/directory` default in the user's
 /// mimeapps.list, where `xdg-mime default` writes it.
@@ -152,7 +167,7 @@ pub fn set_default() -> Result<String, String> {
     // "Show in folder" from browsers and other apps comes here too.
     #[cfg(not(test))]
     let _ = crate::fm1::set_service(true, &crate::fm1::exe());
-    Ok("Maia is now the default file manager".into())
+    Ok("Mochi is now the default file manager".into())
 }
 
 /// Give folders back to the file manager used before Maia, else to another one that
@@ -195,13 +210,21 @@ pub fn uninstall() -> Result<String, String> {
         std::fs::remove_file(&bin).map_err(|e| e.to_string())?;
     }
     let _ = Command::new("update-desktop-database").arg(local().join("applications")).status();
-    Ok("Maia uninstalled (settings were kept)".into())
+    Ok("Mochi uninstalled (settings were kept)".into())
 }
 
 /// The window icon: the launcher icon at 64 px, for X11 window lists and docks
 /// (Wayland ones find the launcher's icon through the app id).
 pub fn window_icon() -> (Vec<u8>, u32, u32) {
-    let Some(img) = crate::imgdec::decode_bytes(ICON_PNG) else { return (vec![0; 4], 1, 1) };
-    let img = crate::imgdec::downscale(&img, 64);
-    (img.px, img.w, img.h)
+    let Some((w, h, mut px)) = crate::svg::render(ICON_SVG.as_bytes(), 64) else { return (vec![0; 4], 1, 1) };
+    // Un-premultiply: the renderer's pixels are premultiplied, the window icon's are not.
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        if a > 0 && a < 255 {
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    (px, w, h)
 }

@@ -293,6 +293,10 @@ impl Updater {
         if self.busy() {
             return;
         }
+        // Mochi: Maia's releases would drop the redesign; rebuild from the upstream clone.
+        if cfg!(not(test)) {
+            return crate::mochi::check(self.state.clone(), ctx.clone());
+        }
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = State::Checking;
         let (state, fetch, ctx) = (self.state.clone(), self.fetch.clone(), ctx.clone());
         std::thread::spawn(move || {
@@ -314,6 +318,9 @@ impl Updater {
     pub fn install(&self, r: Release, ctx: &egui::Context) {
         if self.busy() {
             return;
+        }
+        if cfg!(not(test)) {
+            return crate::mochi::install(self.state.clone(), r.version, ctx.clone());
         }
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = State::Downloading(r.version.clone());
         // The tools are this thread's (a simulation's fakes are set per thread).

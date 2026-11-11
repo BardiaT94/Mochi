@@ -151,6 +151,10 @@ pub struct Config {
     pub version: u32,
     // Appearance
     pub theme: ThemeName,
+    /// Mochi: the Catppuccin accent ("Mauve", "Blue", …).
+    pub accent: String,
+    /// Mochi: the preview's share of its panel, as last dragged.
+    pub preview_ratio: f32,
     pub follow_system_theme: bool,
     /// Highlighted code in the theme's own colours (else the same set for every theme).
     pub syntax_theme: bool,
@@ -182,6 +186,8 @@ pub struct Config {
     pub share_without_place: bool,
     /// A folder's README above its files.
     pub show_readme: bool,
+    /// Mochi: typing a search walks the subfolders too (else it narrows this folder only).
+    pub search_subfolders: bool,
     /// The height its card was dragged to, in points (0: its own).
     pub readme_height: f32,
     /// Folder sizes: master switch plus one switch per kind of drive.
@@ -249,7 +255,9 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             version: CONFIG_VERSION,
-            theme: ThemeName::default(),
+            theme: ThemeName::Mocha,
+            accent: crate::mochi::DEFAULT_ACCENT.into(),
+            preview_ratio: 0.18,
             follow_system_theme: false,
             syntax_theme: true,
             round_corners: true,
@@ -270,11 +278,12 @@ impl Default for Config {
             show_hidden: false,
             show_system: false,
             folders_first: true,
-            highlight_recents: true,
+            highlight_recents: false,
             recents_on_top: false,
-            recents_store: RecentsStore::Persistent,
+            recents_store: RecentsStore::Off,
             share_without_place: false,
             show_readme: true,
+            search_subfolders: true,
             readme_height: 0.0,
             folder_sizes: true,
             sizes_ssd: true,
@@ -300,7 +309,7 @@ impl Default for Config {
             dblclick_bg_parent: false,
             picture_viewer: false,
             reverse_scroll: false,
-            char_key_action: CharKeyAction::TriggerHotkey,
+            char_key_action: CharKeyAction::Jump,
             middle_click: MiddleClick::OpenInSplit,
             inspector_layout: InspectorLayout::Auto,
             source_views: SourceViews::default(),
@@ -692,13 +701,13 @@ impl UserData {
 // ---------------------------------------------------------------- files
 
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(|| crate::fsx::home().join(".config")).join("maia")
+    dirs::config_dir().unwrap_or_else(|| crate::fsx::home().join(".config")).join(crate::mochi::DIR)
 }
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(|| crate::fsx::home().join(".local/share")).join("maia")
+    dirs::data_dir().unwrap_or_else(|| crate::fsx::home().join(".local/share")).join(crate::mochi::DIR)
 }
 pub fn state_dir() -> PathBuf {
-    dirs::state_dir().unwrap_or_else(|| crate::fsx::home().join(".local/state")).join("maia")
+    dirs::state_dir().unwrap_or_else(|| crate::fsx::home().join(".local/state")).join(crate::mochi::DIR)
 }
 pub fn config_path() -> PathBuf {
     config_dir().join("config.json")
@@ -746,6 +755,9 @@ pub fn load_config() -> Config {
         let _ = std::fs::copy(&path, path.with_extension("json.bak"));
     }
     migrate(&mut cfg);
+    // Mochi: typing in a folder always jumps to the name typed (as Windows does): the
+    // list keeps the keyboard, so the arrows go on from there.
+    cfg.char_key_action = CharKeyAction::Jump;
     cfg
 }
 
@@ -771,7 +783,8 @@ pub fn mtime(p: &Path) -> Option<std::time::SystemTime> {
 
 impl Config {
     pub fn track_recents(&self) -> bool {
-        self.recents_store != RecentsStore::Off
+        // Mochi keeps no recent files.
+        false
     }
     /// May folder sizes be computed for a folder on this kind of drive?
     pub fn sizes_on(&self, k: DriveKind) -> bool {

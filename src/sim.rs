@@ -57,6 +57,8 @@ pub fn root() -> PathBuf {
             std::env::set_var("XDG_DATA_HOME", r.join("xdg/data"));
             std::env::set_var("XDG_CACHE_HOME", r.join("xdg/cache"));
             std::env::set_var("XDG_STATE_HOME", r.join("xdg/state"));
+            // A plain shell whose prompt ends in `$`, whatever this user's login shell is.
+            std::env::set_var("SHELL", "/bin/sh");
         }
         r
     })
@@ -660,6 +662,14 @@ impl Sim {
         let app = App::new(&ctx, vec![path.to_path_buf()]);
         let shots = std::env::var_os("MAIA_SIM_SHOTS").map(|d| Box::new(Shots { dir: PathBuf::from(d), textures: Default::default(), prims: vec![] }));
         let mut s = Sim { ctx, app, size, ppp: 1.6, time: 0.0, pointer: pos2(-10.0, -10.0), mods: egui::Modifiers::NONE, frame_ms: vec![], log: VecDeque::new(), check_overlap: false, check_popup_overlap: false, slow: vec![], popup_checks: Default::default(), texts: vec![], text_colors: vec![], shots, repaint: std::time::Duration::MAX, copied: vec![] };
+        // Mochi: the journeys were written for Maia's start, with the preview closed and
+        // typing filtering; Mochi's own journey (`mochi_header_search_and_menus`) turns
+        // its defaults back on.
+        for p in s.app.panels.values_mut() {
+            p.inspector = None;
+        }
+        s.app.cfg.char_key_action = crate::config::CharKeyAction::TriggerHotkey;
+        s.app.cfg.search_subfolders = false;
         // MAIA_SIM_LOOK=FONT,SPACING runs a session at another font size and Spacing.
         if let Some((f, sp)) = std::env::var("MAIA_SIM_LOOK").ok().and_then(|v| v.split_once(',').and_then(|(f, sp)| Some((f.trim().parse().ok()?, sp.trim().parse().ok()?)))) {
             s.app.cfg.font_size = f;
@@ -3476,7 +3486,8 @@ mod journeys {
         let mut s = Sim::new(&home, vec2(1280.0, 800.0));
         go(&mut s, &dir);
         for n in names {
-            assert!(some_text(&s, n), "{n} listed whole");
+            // Mochi: Persian and Hebrew drawn shaped, right to left.
+            assert!(some_text(&s, n) || some_text(&s, &crate::mochi::visual(n)), "{n} listed whole");
         }
         s.shot("scripts-details");
         for v in [ViewList, ViewLarge, ViewTree] {
@@ -3492,6 +3503,117 @@ mod journeys {
         look(&mut s, "scripts preview");
         s.shot("scripts-preview");
         report("scripts", &s);
+    }
+
+    /// Mochi's header, search and menus, with Mochi's own defaults: typing jumps to a
+    /// name and the arrows go on from it; a search walks the subfolders and folds back
+    /// when cleared; the sort button's menu and its direction; the ⋮ menu's three groups;
+    /// the empty space's menu; Ctrl+S splits right; New File makes a Markdown file; a
+    /// new panel's preview is open.
+    #[test]
+    fn mochi_header_search_and_menus() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("mochi-header");
+        let d = home.join("Dots");
+        for n in [".cache", ".conda", ".config", "Work/deep"] {
+            std::fs::create_dir_all(d.join(n)).unwrap();
+        }
+        std::fs::write(d.join("Work/deep/quarterly-report.md"), "numbers").unwrap();
+        std::fs::write(d.join("top.txt"), "top").unwrap();
+        let mut s = Sim::new(&d, vec2(1280.0, 800.0));
+        s.app.cfg.char_key_action = crate::config::CharKeyAction::Jump;
+        s.app.cfg.search_subfolders = true;
+        s.cmd(ToggleHidden);
+        s.settle();
+        assert!(s.app.cfg.show_hidden, "the dot folders listed");
+        let cursor = |s: &Sim| s.tab().cursor.map(|c| s.tab().entries[c as usize].name.clone()).unwrap_or_default();
+        // Typing jumps; the list keeps the keyboard, so ↓ goes on.
+        s.act("text .co");
+        s.idle(2);
+        assert_eq!(cursor(&s), ".conda", "typed .co");
+        assert!(!s.app.panels[&s.app.active].filter_has_focus && s.tab().filter.is_empty(), "nothing filtered");
+        s.act("key ArrowDown");
+        s.idle(2);
+        assert_eq!(cursor(&s), ".config", "the arrow goes on from the jump");
+        // The search walks into the subfolders, and folds back when cleared.
+        s.act("key ctrl+f");
+        s.act("text quarterly");
+        wait_until(&mut s, "found in a subfolder", 10, |s| !s.tab().is_loading() && s.tab().view.iter().any(|&i| s.tab().entries[i as usize].name == "quarterly-report.md"));
+        assert!(s.tab().flatten && s.tab().auto_flat, "walked for the search");
+        look(&mut s, "a search in the subfolders");
+        s.act("key Escape");
+        s.settle();
+        assert!(!s.tab().flatten && s.tab().filter.is_empty(), "folded back");
+        // Sort: the button's menu, then the direction beside it.
+        click_control(&mut s, "sort button");
+        s.idle(2);
+        assert!(matches!(s.app.popup, Popup::SortMenu { .. }), "the sort menu");
+        assert!(some_text(&s, "Date created") && some_text(&s, "Descending (Z to A)"));
+        look(&mut s, "sort menu");
+        s.click_text("Size");
+        s.settle();
+        assert_eq!(s.tab().settings.sort, crate::config::SortKey::Size);
+        let desc = s.tab().settings.desc;
+        click_control(&mut s, "sort direction");
+        s.settle();
+        assert_eq!(s.tab().settings.desc, !desc, "one click reverses");
+        // ⋮: Folder, Show, View; no grouping, tabs, splits or saved view settings.
+        click_control(&mut s, "panel menu");
+        s.idle(2);
+        assert!(some_text(&s, "Preview pane") && some_text(&s, "Hidden files") && some_text(&s, "Find Duplicates…"));
+        for gone in ["Split Right", "New Tab", "Close Tab", "Close Panel", "Saved View Settings…", "Group", "Open In New Tab", "Toggle Expand Folder"] {
+            assert!(!some_text(&s, gone), "{gone} in the ⋮ menu");
+        }
+        look(&mut s, "panel menu");
+        s.act("key Escape");
+        s.idle(1);
+        // The empty space's menu: Kiro, no saved view settings; New File is Markdown.
+        let list = s.app.panels[&s.app.active].list_rect;
+        s.act(&format!("click {:.0} {:.0} right", list.center().x, list.bottom() - 20.0));
+        s.idle(2);
+        assert!(some_text(&s, "Open in Kiro") && !some_text(&s, "Saved View Settings…"), "the folder's menu");
+        s.click_text("New File");
+        s.settle();
+        assert!(d.join("New file.md").is_file(), "New File makes a .md");
+        s.act("key Escape");
+        s.settle();
+        // Ctrl+S splits right, and the new panel's preview is open.
+        s.act("key ctrl+s");
+        s.settle();
+        let panels: Vec<Rect> = s.app.panels.values().map(|p| p.rect).collect();
+        assert_eq!(panels.len(), 2);
+        assert!((panels[0].top() - panels[1].top()).abs() < 1.0, "side by side");
+        assert!(s.app.panels.values().any(|p| p.inspector.is_some()), "the new panel's preview open");
+        look(&mut s, "split right");
+        report("mochi_header_search_and_menus", &s);
+    }
+
+    #[test]
+    fn f5_rereads_the_folder() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("f5");
+        let mut s = Sim::new(&home.join("Documents"), vec2(1280.0, 800.0));
+        s.settle();
+        for focus in ["none", "row"] {
+            if focus == "row" {
+                let r = s.text_rect("notes.txt").center();
+                s.act(&format!("click {:.0} {:.0}", r.x, r.y));
+                s.settle();
+            }
+            let before = s.tab().loaded_at;
+            s.act("key F5");
+            s.settle();
+            assert_ne!(s.tab().loaded_at, before, "F5 re-read the folder ({focus})");
+        }
+        // Folder sizes inside are measured again.
+        let sub = home.join("Documents").join("Taxes");
+        s.app.stats.map.insert(sub.clone(), Default::default());
+        s.act("key F5");
+        assert!(!s.app.stats.map.contains_key(&sub) || s.app.stats.map[&sub].size > 0, "F5 forgot the subfolder's size");
     }
 
     #[test]
@@ -3983,7 +4105,7 @@ mod journeys {
         assert_eq!(s.tab().path, home.join("Documents"));
         // F5 into an existing name: Keep both.
         select_path(&mut s, &src);
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         s.settle();
         assert!(s.popup_open(), "conflict dialog shown");
         s.click_text("Keep both");
@@ -3992,7 +4114,7 @@ mod journeys {
         assert_eq!(std::fs::read_to_string(dst_dir.join("report.md")).unwrap(), "older report");
         // Again: Replace.
         select_path(&mut s, &src);
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         s.settle();
         s.click_text("Replace");
         s.settle();
@@ -4004,7 +4126,7 @@ mod journeys {
         s.settle();
         wait_until(&mut s, "the replaced one back", 10, |_| std::fs::read_to_string(dst_dir.join("report.md")).ok().as_deref() == Some("older report"));
         select_path(&mut s, &src);
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         s.settle();
         assert!(s.texts.iter().any(|(_, t)| t.ends_with("· newer · bigger") || t.ends_with("· bigger") || t.ends_with("· newer")), "which is newer or bigger, said");
         look(&mut s, "conflict");
@@ -5585,8 +5707,8 @@ mod journeys {
             }
         };
         switch(&mut s, Some(true));
-        assert!(std::fs::read_to_string(&cfg).unwrap().contains("inode/directory=io.github.yappologistic.Maia.desktop;"), "Maia set as default");
-        assert_eq!(s.app.toast.as_ref().map(|t| t.0.as_str()), Some("Maia is now the default file manager"));
+        assert!(std::fs::read_to_string(&cfg).unwrap().contains(&format!("inode/directory={}.desktop;", crate::mochi::APP_ID)), "Mochi set as default");
+        assert_eq!(s.app.toast.as_ref().map(|t| t.0.as_str()), Some("Mochi is now the default file manager"));
         look(&mut s, "default file manager on");
         s.act("key Escape");
         s.settle();
@@ -6257,7 +6379,7 @@ mod journeys {
         s.settle();
         select_names(&mut s, &["noise.bin", "notes.txt"]);
         open_submenu(&mut s, "notes.txt", "Compress");
-        s.click_text("Tar.xz (.tar.xz)");
+        menu_pick(&mut s, "Tar.xz (.tar.xz)");
         s.idle(3);
         assert!(matches!(&s.app.popup, Popup::Compress(st) if st.name == "Archive.tar.xz"), "named as before");
         assert!(some_text(&s, "Compress 2 items"));
@@ -6857,7 +6979,7 @@ mod journeys {
             s.idle(3);
             s.act("text install");
             s.idle(3);
-            assert_eq!(s.texts.iter().any(|(_, t)| t.ends_with("Install Maia")), shown, "installed: {installed}");
+            assert_eq!(s.texts.iter().any(|(_, t)| t.ends_with("Install Mochi")), shown, "installed: {installed}");
             s.app.popup = Popup::None;
             s.idle(2);
         }
@@ -7035,7 +7157,7 @@ mod journeys {
         std::fs::write(home.join("Documents/main.rs"), "// demo\nfn main() {\n    let x: u32 = 42;\n    println!(\"{x}\\n\");\n}\n\n#[derive(Debug)]\nstruct Point<'a> { name: &'a str, x: f64 }\n\nimpl Point<'_> {\n    const ORIGIN: f64 = 0.0;\n    fn norm(&self) -> Option<f64> { Some(self.x.abs()) }\n}\n").unwrap();
         let mut s = Sim::new(&home.join("Documents"), vec2(1280.0, 800.0));
         use crate::theme::{Syntax, ThemeName};
-        assert_eq!(s.app.pal.syntax, Syntax::of(ThemeName::Midnight), "code in the theme's colours by default");
+        assert_eq!(s.app.pal.syntax, Syntax::of(crate::config::Config::default().theme), "code in the theme's colours by default");
         s.act("key ctrl+Comma");
         s.settle();
         s.act("text color scheme");
@@ -7075,10 +7197,10 @@ mod journeys {
         s.act(&format!("move {:.0} {:.0}", r.center().x, r.center().y));
         s.idle(3);
         assert_eq!(s.app.pal.panel, crate::theme::palette(ThemeName::Gruvbox).panel, "previewed while hovered");
-        assert_eq!(s.app.cfg.theme, ThemeName::Midnight, "not chosen by a hover");
+        assert_eq!(s.app.cfg.theme, crate::config::Config::default().theme, "not chosen by a hover");
         s.act(&format!("move {:.0} {:.0}", done.left() - 300.0, done.center().y));
         s.idle(3);
-        assert_eq!(s.app.pal.panel, crate::theme::palette(ThemeName::Midnight).panel, "the chosen theme is back");
+        assert_eq!(s.app.pal.panel, crate::theme::palette(crate::config::Config::default().theme).panel, "the chosen theme is back");
         // Typing searches, by name or by its line.
         s.act("key ctrl+a");
         s.act("text tokyo");
@@ -7116,7 +7238,7 @@ mod journeys {
         s.idle(3);
         assert!(ThemeName::ALL.iter().all(|t| ctl(&s, t.label()).is_some() == !t.is_light()), "only dark themes");
         // The arrows walk the cards and show each on the window; Enter keeps one.
-        let order: Vec<ThemeName> = ThemeName::ALL.into_iter().filter(|t| !t.is_light()).collect();
+        let order: Vec<ThemeName> = crate::mochi::themes_first().into_iter().filter(|t| !t.is_light()).collect();
         s.act("move -50 -50");
         s.act("key Home");
         s.idle(2);
@@ -7124,7 +7246,7 @@ mod journeys {
         s.act("key ArrowRight");
         s.idle(2);
         assert_eq!(s.app.pal.panel, crate::theme::palette(order[1]).panel, "Right: the next card, previewed");
-        assert_eq!(s.app.cfg.theme, ThemeName::Midnight, "not chosen by the arrows");
+        assert_eq!(s.app.cfg.theme, crate::config::Config::default().theme, "not chosen by the arrows");
         let y = |s: &Sim, t: ThemeName| ctl(s, t.label()).map_or(0.0, |r| r.center().y);
         s.act("key ArrowDown");
         s.idle(2);
@@ -7137,7 +7259,7 @@ mod journeys {
         s.act("key Escape");
         s.idle(3);
         assert!(matches!(s.app.popup, Popup::Options(_)), "Esc goes back");
-        assert_eq!(s.app.pal.panel, crate::theme::palette(ThemeName::Midnight).panel, "nothing chosen");
+        assert_eq!(s.app.pal.panel, crate::theme::palette(crate::config::Config::default().theme).panel, "nothing chosen");
         // Opened again, the filter is as it was left; the arrows and Enter choose.
         s.act("text color scheme");
         s.idle(3);
@@ -7147,10 +7269,10 @@ mod journeys {
         s.act("key ArrowRight");
         s.act("key Enter");
         s.idle(3);
-        let after = order[order.iter().position(|t| *t == ThemeName::Midnight).unwrap() + 1];
+        let after = order[order.iter().position(|t| *t == crate::config::Config::default().theme).unwrap() + 1];
         assert_eq!(s.app.cfg.theme, after, "Enter keeps the focused theme");
         assert!(matches!(s.app.popup, Popup::Options(_)), "and goes back");
-        s.app.cfg.theme = ThemeName::Midnight;
+        s.app.cfg.theme = crate::config::Config::default().theme;
         s.act("text color scheme");
         s.idle(3);
         click_control(&mut s, "choose theme");
@@ -8874,7 +8996,7 @@ mod journeys {
         std::fs::create_dir_all(a.join("both/deep")).unwrap();
         std::fs::write(a.join("both/deep/inner.txt"), "inner").unwrap();
         let mut s = Sim::new(&a, vec2(1280.0, 800.0));
-        s.act("key ctrl+shift+s");
+        s.act("key ctrl+s"); // Mochi: Ctrl+S splits right
         s.settle();
         go(&mut s, &b);
         s.act("key Tab");
@@ -9539,7 +9661,10 @@ mod journeys {
         let row = row_text(&s, "main.rs");
         s.act(&format!("click {:.0} {:.0} right", row.center().x, row.center().y));
         s.idle(2);
-        s.click_text("Open In Editor");
+        // Mochi: under the menu's "Open in".
+        s.click_text("Open in");
+        s.idle(2);
+        s.click_text("Editor");
         assert!(launched().last().is_some_and(|l| l.contains("editors/editor/zed")), "{:?}", launched().last());
         // A folder opens as a folder.
         s.app.cfg.editor = "code".into();
@@ -10437,11 +10562,8 @@ mod journeys {
         write(&d.join("only once.txt"), b"nothing like it\n", false);
         let mut s = Sim::new(&d, vec2(1280.0, 800.0));
         s.idle(3);
-        let list = s.app.panels[&s.app.active].list_rect;
-        s.act(&format!("click {:.0} {:.0} right", list.center().x, list.bottom() - 40.0));
-        s.idle(2);
-        assert!(some_text(&s, "Find Duplicates…"), "in the folder's menu");
-        s.click_text("Find Duplicates…");
+        // Mochi: in the toolbar's ⋮ menu, not the right-click one.
+        s.cmd(FindDuplicates);
         let st = |s: &Sim| match &s.app.popup {
             Popup::Duplicates(d) => (d.done, d.sets.clone(), d.checked.len()),
             _ => s.fail("Find Duplicates is not open"),
@@ -10758,7 +10880,7 @@ mod journeys {
         assert_eq!(names(&s), ["src", "NEW.txt"]);
         s.idle(3);
         // The hint says what the filter narrows; the figure at its end, how many are left.
-        assert!(some_text(&s, "Filter changed…") && some_text(&s, "2"));
+        assert!(some_text(&s, "Search changed files…") && some_text(&s, "2 items"));
         look(&mut s, "only changed");
         s.shot("only-changed");
         s.act("key ctrl+shift+g");
@@ -11227,7 +11349,7 @@ mod journeys {
         s.act("key Tab");
         s.settle();
         select_path(&mut s, &docs.join("report.md"));
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         s.settle();
         shot_open(&mut s, "conflict");
         close(&mut s);
@@ -11812,18 +11934,18 @@ mod journeys {
             s.act(&format!("click {:.0} {:.0} right", row.center().x, row.center().y));
             s.idle(2);
         };
-        // A folder: neither.
+        // Mochi: neither is in the menu any more, for a folder or a file; both are in
+        // the palette.
         select_path(&mut s, &d.join("Receipts"));
         right(&mut s, "Receipts");
         assert!(!some_text(&s, "Email") && !some_text(&s, "Print…"));
         s.act("key Escape");
-        // Email from the menu.
         select_path(&mut s, &d.join("report.pdf"));
         right(&mut s, "report.pdf");
-        assert!(some_text(&s, "Email") && some_text(&s, "Print…"));
-        shot_still(&mut s, "email-print-menu");
+        assert!(!some_text(&s, "Email") && !some_text(&s, "Print…"));
+        s.act("key Escape");
         let n = launched().len();
-        s.click_text("Email");
+        palette_run(&mut s, "Email");
         s.idle(2);
         assert!(launched()[n..].iter().any(|l| l.contains("xdg-email") && l.contains(&format!("\"--attach\" \"{}\"", d.join("report.pdf").display()))), "{:?}", &launched()[n..]);
         assert!(toast_is(&s, "Opening a new email"));
@@ -11880,9 +12002,8 @@ mod journeys {
         // No CUPS: not offered. No mail app: said so.
         crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(root().join("sendto-none")));
         crate::sendto::MAIL_APP.with(|m| *m.borrow_mut() = None);
-        right(&mut s, "notes.txt");
-        assert!(some_text(&s, "Email") && !some_text(&s, "Print…"));
-        s.click_text("Email");
+        select_path(&mut s, &d.join("notes.txt"));
+        palette_run(&mut s, "Email");
         s.idle(2);
         assert!(toast_is(&s, "No mail app is set up"));
         report("email-print", &s);
@@ -11941,7 +12062,7 @@ mod journeys {
         for t in ["Rotate left", "Rotate right", "Resize", "Crop…"] {
             assert!(some_text(&s, t), "{t}");
         }
-        s.click_text("Resize");
+        menu_pick(&mut s, "Resize");
         s.idle(2);
         // A long menu in a short window scrolls down to the sizes.
         for _ in 0..20 {
@@ -11955,7 +12076,7 @@ mod journeys {
         assert!(some_text(&s, "Fit within 1920 px") && some_text(&s, "Other size…"));
         look(&mut s, "the picture menu");
         shot_still(&mut s, "picture-menu");
-        s.click_text("Rotate right");
+        menu_pick(&mut s, "Rotate right");
         wait_until(&mut s, "the turn", 15, |s| s.app.undo.last().is_some_and(|u| u.label == "Rotate photo.jpg"));
         assert_eq!(shown("photo.jpg"), Some([400, 240]));
         let undos = s.app.undo.len();
@@ -11971,7 +12092,7 @@ mod journeys {
         right(&mut s, "big.png");
         s.click_text("Picture");
         s.idle(1);
-        s.click_text("Resize");
+        menu_pick(&mut s, "Resize");
         s.idle(1);
         s.click_text("Fit within 1920 px");
         wait_until(&mut s, "the fitted copy", 15, |s| toast_is(s, "Saved big (1920 px).png"));
@@ -11999,7 +12120,7 @@ mod journeys {
         right(&mut s, "photo.jpg");
         s.click_text("Picture");
         s.idle(1);
-        s.click_text("Crop…");
+        menu_pick(&mut s, "Crop…");
         wait_until(&mut s, "the picture", 10, |s| some_text(s, "Drag over the part to keep"));
         look(&mut s, "crop started");
         s.shot("crop-start");
@@ -12114,6 +12235,8 @@ mod journeys {
             s.act(&format!("scroll {:.0} {:.0} -3", at.x, at.y));
             s.idle(2);
         }
+        // Mochi: let the scroll's glide end, or a click lands on the row that was there.
+        s.idle(8);
     }
 
     /// Converting from the Convert menu and the palette: only formats the files aren't
@@ -12258,11 +12381,9 @@ mod journeys {
         let mut s = Sim::new(&d, vec2(1280.0, 800.0));
         s.app.cfg.theme = crate::theme::ThemeName::Graphite;
         s.settle();
+        // Mochi: in the toolbar's ⋮ menu, not the right-click one.
         let open = |s: &mut Sim| {
-            let list = s.app.panels[&s.app.active].list_rect;
-            s.act(&format!("click {:.0} {:.0} right", list.center().x, list.bottom() - 30.0));
-            s.idle(2);
-            menu_pick(s, "Tidy Folder…");
+            s.cmd(TidyFolder);
             wait_until(s, "the plan", 10, |s| matches!(&s.app.popup, Popup::Tidy(t) if t.plans.is_some()));
             s.idle(2);
         };
@@ -12456,14 +12577,11 @@ mod journeys {
         let mut s = Sim::new(&home, vec2(1280.0, 800.0));
         s.app.cfg.theme = crate::theme::ThemeName::Graphite;
         s.settle();
-        // The sidebar, long with what other journeys left in it, scrolled to it.
-        for _ in 0..10 {
-            if sidebar_text(&s, "Timeline").is_some() {
-                break;
-            }
-            s.act(&format!("scroll {:.0} 400 -6", s.app.sidebar_width / 2.0));
-            s.idle(2);
-        }
+        // Mochi keeps no recent files: no Timeline, in the sidebar or the palette.
+        assert!(sidebar_text(&s, "Timeline").is_none(), "no Timeline in the sidebar");
+        assert!(!crate::mochi::COMMANDS.contains(&Timeline), "Timeline hidden from the palette");
+        return;
+        #[allow(unreachable_code)]
         let row = sidebar_text(&s, "Timeline").unwrap_or_else(|| s.fail("Timeline in the sidebar"));
         let home_row = sidebar_text(&s, "Home").unwrap();
         assert!(row.top() > home_row.top() && row.top() - home_row.top() < 60.0, "right under Home");
@@ -13134,7 +13252,7 @@ mod journeys {
         wait_until(&mut s, "the first job running", 10, |s| s.app.queue.running().len() == 1);
         let waiting = |s: &Sim, label: &str| job_with(s, label).is_some_and(|p| p.lock().unwrap().waiting.as_deref() == Some("Copying big.bin"));
         select_path(&mut s, &docs.join("notes.txt"));
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         wait_until(&mut s, "the second copy queued", 10, |s| waiting(s, "Copying notes.txt"));
         s.idle(3);
         assert!(some_text(&s, "Waiting for “Copying big.bin”") && some_text(&s, "Start now"), "the card says what it waits for");
@@ -13145,7 +13263,7 @@ mod journeys {
         wait_until(&mut s, "started now", 10, |_| backups.join("notes.txt").exists());
         // Cancelled while it waits: nothing copied.
         select_path(&mut s, &docs.join("report.md"));
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         wait_until(&mut s, "queued again", 10, |s| waiting(s, "Copying report.md"));
         s.idle(2);
         click_control(&mut s, "job cancel");
@@ -13159,7 +13277,7 @@ mod journeys {
         s.act("key Tab");
         s.settle();
         select_path(&mut s, &far.join("in/photo.png"));
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         wait_until(&mut s, "a copy on another disk", 10, |_| far.join("out/photo.png").exists());
         go(&mut s, &docs);
         s.act("key Tab");
@@ -13168,7 +13286,7 @@ mod journeys {
         s.settle();
         // Queued behind the first, then the first resumed: the one waiting follows.
         select_path(&mut s, &docs.join("budget 2026.csv"));
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         wait_until(&mut s, "queued behind the first", 10, |s| waiting(s, "Copying budget 2026.csv"));
         s.idle(2);
         s.click_text("Resume");
@@ -13197,7 +13315,7 @@ mod journeys {
         s.settle();
         // Checked: a good copy lands; one that comes back changed is an error, removed.
         select_path(&mut s, &docs.join("résumé – final (v3).txt"));
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         wait_until(&mut s, "a checked copy", 10, |_| backups.join("résumé – final (v3).txt").exists());
         let bad = format!("{} trip.png", crate::ops::SPOILED);
         std::fs::write(docs.join(&bad), vec![9u8; 300_000]).unwrap();
@@ -13205,7 +13323,7 @@ mod journeys {
         s.app.panels.get_mut(&id).unwrap().tab_mut().reload();
         s.settle();
         select_path(&mut s, &docs.join(&bad));
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         let failed = |s: &Sim| s.app.jobs.iter().any(|j| j.progress.lock().unwrap().finished && !j.progress.lock().unwrap().errors.is_empty());
         wait_until(&mut s, "the check's error", 10, failed);
         assert!(!backups.join(&bad).exists(), "the bad copy removed");
@@ -13860,17 +13978,11 @@ mod journeys {
         let mut s = Sim::new(&docs, vec2(1280.0, 800.0));
         s.app.cfg.theme = crate::theme::ThemeName::Graphite;
         s.idle(3);
+        // Mochi: from the palette (it left the file's menu).
         let row = row_text(&s, "report.txt");
-        s.act(&format!("click {:.0} {:.0} right", row.center().x, row.center().y));
+        s.act(&format!("click {:.0} {:.0}", row.center().x, row.center().y));
         s.idle(2);
-        // The menu is taller than the window: its end scrolled to.
-        if !some_text(&s, "Previous Versions…") {
-            let r = s.text_rect("Rename");
-            s.act(&format!("scroll {:.0} {:.0} -30", r.center().x, r.center().y));
-            s.idle(4);
-        }
-        assert!(some_text(&s, "Previous Versions…"), "in the file's menu");
-        s.click_text("Previous Versions…");
+        palette_run(&mut s, "Previous Versions…");
         wait_until(&mut s, "the snapshots read", 10, |s| versions_page(s).is_some_and(|p| p.found.is_some()));
         s.idle(3);
         let n = versions_page(&s).and_then(|p| p.found.as_ref()).map_or(0, |f| f.versions.len());
@@ -14698,8 +14810,11 @@ mod journeys {
         } else {
             s.act("key Escape");
         }
-        // Nothing to read a HEIC: what to install.
-        crate::drives::FAKE.with(|f| *f.borrow_mut() = None);
+        // Nothing to read a HEIC: what to install. (An empty folder of tools: with none
+        // faked, this machine's own ImageMagick would be found.)
+        let none = root().join("anim-no-tools");
+        std::fs::create_dir_all(&none).unwrap();
+        crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(none));
         select_path(&mut s, &d.join("still.png"));
         select_path(&mut s, &d.join("photo.heic"));
         // Only where nothing reads a HEIC: a desktop thumbnailer for it (glycin's, say)
@@ -14751,7 +14866,7 @@ mod journeys {
         let row = row_text(&s, "01 Intro.mp3");
         s.act(&format!("click {:.0} {:.0} right", row.center().x, row.center().y));
         s.idle(2);
-        s.click_text("Add to Shelf");
+        menu_pick(&mut s, "Add to Shelf");
         assert_eq!(shelf_names(&s), ["notes.txt", "01 Intro.mp3"]);
         // Dragged from the list onto the strip.
         let row = row_text(&s, "02 Song.flac");
@@ -14910,7 +15025,7 @@ mod journeys {
         assert_eq!(seen(), now, "this version written down at once");
         s.shot("tour-start");
         let n = crate::tour::WELCOME.len();
-        for t in ["Welcome to Maia", "Get started", "Skip", &format!("1 of {n}")] {
+        for t in ["Welcome to Mochi", "Get started", "Skip", &format!("1 of {n}")] {
             assert!(some_text(&s, t), "{t:?} on the first page");
         }
         let d = crate::config::Config::default();
@@ -15859,7 +15974,7 @@ mod journeys {
             s.settle();
         };
         switch(&mut s, true);
-        assert_eq!(std::fs::read_to_string(&conf).unwrap(), "[preferred]\n# mine\ndefault=gtk\norg.freedesktop.impl.portal.FileChooser=maia\n");
+        assert_eq!(std::fs::read_to_string(&conf).unwrap(), "[preferred]\n# mine\ndefault=gtk\norg.freedesktop.impl.portal.FileChooser=mochi\n");
         assert!(crate::portal::Places::user().portal_file().is_file(), "the backend is there for the portal to find");
         switch(&mut s, false);
         assert_eq!(std::fs::read_to_string(&conf).unwrap(), theirs, "KDE's dialog again");
@@ -16151,7 +16266,7 @@ mod journeys {
         let i = s.tab().entries.iter().position(|e| e.name == "img01.png").unwrap() as u32;
         let id = s.app.active;
         s.app.panels.get_mut(&id).unwrap().tab_mut().selected.insert(i);
-        s.act("key F5");
+        s.cmd(CopyToOther); // Mochi: F5 is Refresh
         wait_until(&mut s, "the conflict", 10, |s| matches!(s.app.popup, Popup::Conflict(_)));
         // Their pictures come from the thumbnail workers.
         for _ in 0..30 {
@@ -16208,7 +16323,7 @@ mod journeys {
         std::fs::write(a.join("sub/inner.txt"), "inside\n").unwrap();
         crate::tags::write(&a.join("notes.txt"), &["Red".into()]).unwrap();
         let mut s = Sim::new(&a, vec2(1280.0, 800.0));
-        s.act("key ctrl+shift+s");
+        s.act("key ctrl+s"); // Mochi: Ctrl+S splits right
         s.settle();
         go(&mut s, &b);
         s.act("key Tab");
@@ -16470,6 +16585,14 @@ mod journeys {
         s.act("key ctrl+c");
         assert_eq!(last_copy(&s), "opens", "a word in a table");
         // A link still opens with a click.
+        // Mochi: the preview's toolbar is taller; scroll the link out from under it.
+        for _ in 0..40 {
+            if inspector(&s).markdown().and_then(|m| m.link_pos("docs/guide.md")).is_some_and(|p| p.y > ir.top() + 80.0) {
+                break;
+            }
+            s.act(&format!("scroll {:.0} {:.0} 2", ir.center().x, ir.center().y));
+            s.idle(12);
+        }
         let at = inspector(&s).markdown().and_then(|m| m.link_pos("docs/guide.md")).unwrap();
         let before = crate::mime::LAUNCHED.lock().unwrap().len();
         s.idle(40);
@@ -17526,10 +17649,11 @@ mod journeys {
         assert!(docs.join("report.md").exists());
         assert_eq!(s.app.ud.destinations.first(), Some(&maia));
         // Move To… from the context menu; the folder used last is offered first, clicked.
+        // Mochi: from the palette (it left the file's menu).
         let r = list_text(&s, "notes.txt");
-        s.act(&format!("click {:.0} {:.0} right", r.center().x, r.center().y));
+        s.act(&format!("click {:.0} {:.0}", r.center().x, r.center().y));
         s.idle(2);
-        s.click_text("Move To…");
+        palette_run(&mut s, "Move To…");
         assert!(dest_picker(&s).is_some_and(|st| st.dest.as_ref().is_some_and(|d| d.mv)));
         s.text_rect("Move “notes.txt” to…");
         s.text_rect("Recent destinations");
@@ -17949,6 +18073,11 @@ mod journeys {
             walk(&mut s, home.join("Gone soon"));
             walk(&mut s, home.clone());
         }
+        // Mochi keeps no history of where you went (recents are off): Jump has only
+        // zoxide's folders, when it is installed.
+        assert!(s.app.ud.visits.is_empty(), "Mochi counted visits");
+        return;
+        #[allow(unreachable_code)]
         assert!(s.app.ud.visits.len() >= 5, "visits counted: {}", s.app.ud.visits.len());
         std::fs::remove_dir(home.join("Gone soon")).unwrap();
         s.act("key ctrl+g");
@@ -19195,19 +19324,15 @@ mod journeys {
         assert!(s.tab().rename.is_some(), "Rename, reached with the keys");
         s.act("key Escape");
         s.idle(2);
-        // Open in › New Tab.
-        let tabs = s.app.panels[&s.app.active].tabs.len();
+        // Mochi: Open in › Editor, Kiro, Terminal (no tabs or splits).
         let one = s.text_rect("one.txt");
         s.act(&format!("click {:.0} {:.0} right", one.center().x, one.center().y));
         s.idle(3);
         s.click_text("Open in");
         s.idle(2);
-        assert!(some_text(&s, "Right Split") && some_text(&s, "New Window"), "the four places, under one");
+        assert!(some_text(&s, "Editor") && some_text(&s, "Kiro") && some_text(&s, "Terminal") && !some_text(&s, "Right Split"), "the places, under one");
         s.shot("redesign-open-in");
-        s.click_text("New Tab");
-        s.settle();
-        assert_eq!(s.app.panels[&s.app.active].tabs.len(), tabs + 1, "opened in a new tab");
-        s.act("key ctrl+w");
+        s.act("key Escape");
         s.settle();
         // The preview's ⋯ menu.
         select_path(&mut s, &dir.join("two.txt"));

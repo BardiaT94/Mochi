@@ -120,7 +120,10 @@ pub(crate) fn trash_dirs() -> Vec<PathBuf> {
     let mut v = vec![home_trash()];
     // Every mount point (including tmpfs and removable media) may hold a topdir trash.
     let mounts = fs::read_to_string("/proc/self/mounts").unwrap_or_default();
-    for mp in mounts.lines().filter_map(|l| l.split_whitespace().nth(1)) {
+    // Mochi: not on network mounts (an rclone Drive, sshfs, GVFS, NFS, SMB): one that
+    // stops answering would hold every look at the trash with it.
+    let remote = |fs: &str| fs.starts_with("fuse.") || matches!(fs, "nfs" | "nfs4" | "cifs" | "smb3" | "smbfs" | "9p" | "sshfs");
+    for mp in mounts.lines().filter(|l| !l.split_whitespace().nth(2).is_some_and(remote)).filter_map(|l| l.split_whitespace().nth(1)) {
         let mp = PathBuf::from(mp.replace("\\040", " "));
         for d in [mp.join(".Trash").join(uid().to_string()), mp.join(format!(".Trash-{}", uid()))] {
             if d.join("info").is_dir() && !v.contains(&d) {
