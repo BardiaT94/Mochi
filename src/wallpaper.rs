@@ -180,7 +180,7 @@ fn sway_quote(s: &str) -> String {
 
 /// Set `path` as the wallpaper. Blocks: run it off the UI thread.
 pub fn set(tools: &Tools, d: &Desk, path: &Path) -> Result<Way, String> {
-    let way = pick(d, |n| tools.has(n)).ok_or("Maia can't set the wallpaper on this desktop")?;
+    let way = pick(d, |n| tools.has(n)).ok_or("Mochi can't set the wallpaper on this desktop")?;
     let xfce = if way == Way::Xfce {
         let mut c = tools.cmd("xfconf-query");
         c.args(["-c", "xfce4-desktop", "-l"]);

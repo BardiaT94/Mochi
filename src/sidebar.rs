@@ -460,7 +460,72 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             }
         };
         // Mochi: no Recents section.
-        // Mochi: no Bookmarks section.
+        // Bookmarks: Maia's pinned folders.
+        {
+            let (files, marks) = CACHE.with(|c| {
+                let c = c.borrow();
+                (c.files.clone(), c.marks.clone())
+            });
+            let show_ext = app.cfg.show_ext;
+            let name_of = |p: &Path| -> String {
+                if !show_ext && files.contains(p) {
+                    if let Some(stem) = p.file_stem() {
+                        return stem.to_string_lossy().into_owned();
+                    }
+                }
+                p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
+            };
+            let hdr_top = ui.cursor().top();
+            let nbm = app.ud.bookmarks.len();
+            let open = section(ui, app, "bookmarks", "Bookmarks", Some(nbm));
+            let hdr = Rect::from_min_size(pos2(ui.min_rect().left(), hdr_top), vec2(width, 26.0));
+            // Dropping folders on the header bookmarks them.
+            if let Some(Drag::Files { paths, .. }) = &app.drag {
+                if pointer.map(|p| hdr.contains(p)).unwrap_or(false) {
+                    ui.painter().rect_stroke(hdr.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), Stroke::new(1.5, pal.accent), egui::StrokeKind::Inside);
+                    if released {
+                        for p in paths.iter().filter(|p| p.is_dir()) {
+                            actions.push(Action::BookmarkAdd(p.clone()));
+                        }
+                    }
+                }
+            }
+            if open {
+                let bms = app.ud.bookmarks.clone();
+                let mut drop_line: Option<(usize, f32)> = None;
+                for (i, b) in bms.iter().enumerate() {
+                    let name = name_of(b);
+                    if !matches(&name) {
+                        continue;
+                    }
+                    // Status comes from the background refresh (unknown yet = assume fine).
+                    let (exists, is_link) = marks.get(b).copied().unwrap_or((true, false));
+                    let resp = item(ui, &name, None, b, !exists, is_link);
+                    nav(&mut actions, &resp, b);
+                    drop_files(ui, &app.drag, &mut actions, &resp, b);
+                    ctx_menu(&resp, &mut actions, b, true);
+                    if resp.drag_started() && app.drag.is_none() {
+                        app.drag = Some(Drag::Bookmark { idx: i });
+                    }
+                    if let (Some(Drag::Bookmark { idx }), Some(p)) = (&app.drag, pointer) {
+                        if resp.rect.contains(p) && *idx != i {
+                            let before = p.y < resp.rect.center().y;
+                            drop_line = Some((if before { i } else { i + 1 }, if before { resp.rect.top() } else { resp.rect.bottom() }));
+                        }
+                    }
+                }
+                if let Some((to, y)) = drop_line {
+                    ui.painter().line_segment([pos2(12.0, y), pos2(width - 8.0, y)], Stroke::new(2.0, pal.accent));
+                    if released {
+                        if let Some(Drag::Bookmark { idx }) = app.drag {
+                            let to = if to > idx { to - 1 } else { to };
+                            actions.push(Action::BookmarkMove { from: idx, to });
+                        }
+                    }
+                }
+            }
+            ui.add_space(6.0);
+        }
         // ---------------- smart folders, once there are any
         let nsmart = app.ud.smart.len();
         if !app.ud.smart.is_empty() && section(ui, app, "smart", "Smart Folders", Some(nsmart)) {

@@ -524,7 +524,7 @@ pub fn format(tools: &Tools, d: &Drive, fs: Fs, label: &str) -> Result<(), Strin
         return Err("Only a removable drive can be formatted here".into());
     }
     if !d.disk.starts_with("/dev/") || !d.disk[5..].bytes().all(|b| b.is_ascii_alphanumeric()) {
-        return Err("Not a drive Maia can format".into());
+        return Err("Not a drive Mochi can format".into());
     }
     release(tools, &parts)?;
     for args in format_calls(&d.disk, fs, &label) {

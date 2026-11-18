@@ -135,7 +135,7 @@ pub fn fatal(what: &str, why: &dyn std::fmt::Display) -> ! {
     let why = why.to_string();
     log(&format!("{what}: {why}"));
     let body = if why.is_empty() { what.to_string() } else { format!("{what}: {why}") };
-    if let Ok(mut c) = std::process::Command::new("notify-send").args(["-a", "Maia", "-u", "critical", "Maia couldn't start", &body]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+    if let Ok(mut c) = std::process::Command::new("notify-send").args(["-a", "Mochi", "-u", "critical", "Mochi couldn't start", &body]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
         let _ = c.wait();
     }
     std::process::exit(1)

@@ -248,6 +248,7 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         }
         if !computer {
             items.push(Item::sep());
+            items.push(Item::cmd(Cmd::ToggleBookmark));
             items.push(Item::cmd(Cmd::Properties));
         }
     } else if t.archive.is_some() {
@@ -433,7 +434,10 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         }
         items.push(Item::cmd(Cmd::DeletePermanent));
         items.push(Item::sep());
-        // Mochi: no Tags, bookmark or What's Using This entries.
+        // Mochi: no Tags or What's Using This entries.
+        if all_dirs {
+            items.push(Item::cmd(Cmd::ToggleBookmark));
+        }
         if !in_trash && t.archive.is_none() {
             let all = ents.iter().all(|e| app.pinned_set.contains(&e.0));
             items.push(Item::labeled(Cmd::PinToTop, if all { "Unpin" } else { "Pin To Top" }));
@@ -488,7 +492,8 @@ pub fn build_place(panel: u64, path: PathBuf, bookmarked: bool, drive: Option<cr
         items.push(Item { id: "terminal_here".into(), label: "Open Terminal Here".into(), act: Act::Terminal(path.clone()), children: vec![] });
         items.push(Item::sep());
         items.push(place("copy_path", "Copy As Path", PlaceAct::CopyPath));
-        let _ = bookmarked;
+        items.push(Item::sep());
+        items.push(if bookmarked { place("unbookmark", "Remove Bookmark", PlaceAct::RemoveBookmark) } else { place("bookmark", "Add Bookmark", PlaceAct::AddBookmark) });
         if let Some(uri) = network {
             items.push(Item::sep());
             items.push(Item { id: "disconnect".into(), label: "Disconnect".into(), act: Act::Disconnect(uri), children: vec![] });

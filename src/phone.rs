@@ -538,7 +538,7 @@ pub fn page(items: &[Item], tok: &str) -> String {
         rows.push_str(&format!("<a href=\"/{tok}/{k}/\" download=\"{}\"><b>{}</b><small>{size}</small></a>\n", esc(&saved_name(it)), esc(&saved_name(it))));
     }
     format!(
-        "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>From Maia</title>\
+        "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>From Mochi</title>\
 <style>body{{font:16px system-ui,sans-serif;margin:0;padding:16px;background:#f4f4f6;color:#222}}a{{display:flex;justify-content:space-between;gap:12px;padding:14px 16px;margin:0 0 8px;background:#fff;border-radius:12px;color:inherit;text-decoration:none}}b{{font-weight:500;overflow-wrap:anywhere}}small{{color:#777;white-space:nowrap}}@media(prefers-color-scheme:dark){{body{{background:#17171a;color:#eee}}a{{background:#24242a}}small{{color:#999}}}}</style></head><body>\n{rows}</body></html>\n"
     )
 }

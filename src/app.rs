@@ -58,10 +58,10 @@ pub enum Drag {
     Bookmark { idx: usize },
 }
 
-/// The window's title for the folder shown: "Invoices · Maia", plain "Maia" for nothing.
+/// The window's title for the folder shown: "Invoices · Mochi", plain "Mochi" for nothing.
 pub fn window_title(shown: &str) -> String {
     let shown: String = shown.chars().filter(|c| *c != '\0').collect();
-    if shown.is_empty() { "Maia".to_string() } else { format!("{shown} · Maia") }
+    if shown.is_empty() { "Mochi".to_string() } else { format!("{shown} · Mochi") }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]

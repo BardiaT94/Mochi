@@ -2864,7 +2864,7 @@ pub(crate) const OPTS: &[(Opt, Section, &str, &str, &str)] = &[
     (Opt::InactiveOpacity, Section::Appearance, "Layout & motion", "Inactive panel opacity", "How visible unfocused panels stay."),
     (Opt::Animations, Section::Appearance, "Layout & motion", "Animations", "Turn every animation on or off."),
     (Opt::Tooltips, Section::Appearance, "Layout & motion", "Tooltips", "Hints when hovering buttons."),
-    (Opt::SystemIcons, Section::Appearance, "Icons & paths", "System icon theme", "The desktop's file icons instead of Maia's."),
+    (Opt::SystemIcons, Section::Appearance, "Icons & paths", "System icon theme", "The desktop's file icons instead of Mochi's."),
     (Opt::Breadcrumbs, Section::Appearance, "Icons & paths", "Path breadcrumbs", "Clickable path segments instead of plain text."),
     (Opt::CompactPaths, Section::Appearance, "Icons & paths", "Compact paths", "Show ~ for your home folder."),
     (Opt::ShowHidden, Section::Files, "List", "Show hidden files", "Show dotfiles."),
@@ -2886,7 +2886,7 @@ pub(crate) const OPTS: &[(Opt, Section, &str, &str, &str)] = &[
     (Opt::ActOnPress, Section::Mouse, "Clicks", "Act on press", "Select on mouse down, not on release."),
     (Opt::OpenFoldersNewTab, Section::Mouse, "Clicks", "Open folders in new tab", "Double-clicked folders open in a new tab."),
     (Opt::DblClickParent, Section::Mouse, "Clicks", "Double-click background goes up", "Double-click empty space for the parent."),
-    (Opt::PictureViewer, Section::Mouse, "Clicks", "Open pictures in Maia's viewer", "Enter and double-click show them full window."),
+    (Opt::PictureViewer, Section::Mouse, "Clicks", "Open pictures in Mochi's viewer", "Enter and double-click show them full window."),
     (Opt::MiddleClick, Section::Mouse, "Clicks", "Middle-click on folder", "Open it in a split or a new tab."),
     (Opt::SelectionBoxes, Section::Mouse, "Clicks", "Selection boxes", "Checkboxes for picking several items."),
     (Opt::ReverseScroll, Section::Mouse, "Scrolling", "Reverse scroll direction", "Invert the mouse wheel."),
@@ -2900,9 +2900,9 @@ pub(crate) const OPTS: &[(Opt, Section, &str, &str, &str)] = &[
     (Opt::MeaningPictures, Section::Search, "", "Include pictures", "Find pictures by what they show."),
     (Opt::IgnoredFiles, Section::Git, "", "Ignored files", "What git ignores, in the listing."),
     (Opt::GitPictures, Section::Git, "", "Show GitHub pictures", "Asks GitHub by username or email; kept on this computer."),
-    (Opt::Startup, Section::System, "Startup", "On startup", "What Maia shows when it starts."),
+    (Opt::Startup, Section::System, "Startup", "On startup", "What Mochi shows when it starts."),
     (Opt::NewTab, Section::System, "Startup", "New tab shows", "The folder a new tab opens."),
-    (Opt::DefaultFm, Section::System, "System", "Default file manager", "Open folders from other apps in Maia."),
+    (Opt::DefaultFm, Section::System, "System", "Default file manager", "Open folders from other apps in Mochi."),
     (Opt::Picker, Section::System, "System", "Open and save dialog", "Pick files for other apps in Mochi."),
     (Opt::SingleInstance, Section::System, "System", "Reuse the open window", "Folders other apps open become tabs here."),
     (Opt::AssetCache, Section::System, "System", "Asset cache size", "Memory for thumbnails and previews."),
@@ -2995,7 +2995,7 @@ fn update_control(ui: &mut Ui, app: &mut App, pal: &Palette) {
             if button(ui, "Check now", false).clicked() {
                 app.updater.check(&ctx);
             }
-            dim(ui, concat!("Maia ", env!("CARGO_PKG_VERSION")));
+            dim(ui, concat!("Mochi ", env!("CARGO_PKG_VERSION")));
         }
         State::Checking => {
             busy(ui, "Checking…");
@@ -3034,7 +3034,7 @@ fn update_control(ui: &mut Ui, app: &mut App, pal: &Palette) {
             dim(ui, "Couldn't update").on_hover_text(e);
         }
         State::CantWrite(dir) => {
-            dim(ui, "Update it where you installed it").on_hover_text(format!("Maia can't write to {}: update it the way it was installed (a package manager, say).", dir.display()));
+            dim(ui, "Update it where you installed it").on_hover_text(format!("Mochi can't write to {}: update it the way it was installed (a package manager, say).", dir.display()));
         }
     }
 }
@@ -7327,7 +7327,7 @@ fn stash_menu(app: &mut App, ctx: &egui::Context, panel: u64, root: &Path, stash
         1 => crate::gitwork::start(&app.ctx, root, crate::gitwork::Op::StashPop(s.clone()), format!("Couldn't apply {}", s.sel)),
         _ => {
             let root = root.to_path_buf();
-            let msg = format!("Drop {}? {}", s.sel, "It can't be brought back from Maia.");
+            let msg = format!("Drop {}? {}", s.sel, "It can't be brought back from Mochi.");
             app.popup = Popup::confirm(msg, "Drop", Box::new(move |app| crate::gitwork::start(&app.ctx, &root, crate::gitwork::Op::StashDrop(s.clone()), format!("Couldn't drop {}", s.sel))));
         }
     }

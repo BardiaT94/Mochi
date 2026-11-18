@@ -1156,7 +1156,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         } else {
             let mut v = vec![if chosen == 0 { "Move to Trash".to_string() } else { format!("Move {} to Trash", crate::fsx::fmt_size(st.checked_size())) }, "Close".into()];
             if n > 0 {
-                v.push("Show in Maia".into());
+                v.push("Show in Mochi".into());
             }
             v
         };
@@ -1226,7 +1226,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                 crate::ui::note_control(ui, c.rect, "space close");
                 close = c.clicked();
                 if n > 0 {
-                    let s = pp::plain_button(ui, "Show in Maia", &pal);
+                    let s = pp::plain_button(ui, "Show in Mochi", &pal);
                     crate::ui::note_control(ui, s.rect, "space show");
                     show = s.clicked();
                 }

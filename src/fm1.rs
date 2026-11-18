@@ -419,7 +419,7 @@ fn one_call(bus: &mut Bus, m: Msg, take: &mut impl FnMut(Request) -> bool) -> bo
         ("org.freedesktop.DBus.Properties", _) => bus.error(&m, "org.freedesktop.DBus.Error.UnknownProperty", "No such property"),
         _ => match request(&m) {
             Some(r) => {
-                if take(r) { bus.reply(&m, "", &[]) } else { bus.error(&m, "org.freedesktop.DBus.Error.Failed", "Maia is closing") }
+                if take(r) { bus.reply(&m, "", &[]) } else { bus.error(&m, "org.freedesktop.DBus.Error.Failed", "Mochi is closing") }
             }
             None => bus.error(&m, "org.freedesktop.DBus.Error.UnknownMethod", "No such method"),
         },

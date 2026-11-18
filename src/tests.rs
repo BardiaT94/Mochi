@@ -4990,7 +4990,7 @@ fn git_discard_keeps_what_it_discards() {
     assert_eq!(letters(&w.staged), [("a.txt".into(), 'M')], "the staged change stays");
     let refs = crate::gitwork::refs(&d);
     assert_eq!(refs.stashes.len(), 1);
-    assert!(refs.stashes[0].subject.ends_with("Discarded in Maia: a.txt"), "{:?}", refs.stashes[0]);
+    assert!(refs.stashes[0].subject.ends_with("Discarded in Mochi: a.txt"), "{:?}", refs.stashes[0]);
     let out = std::process::Command::new("git").arg("-C").arg(&d).args(["show", &format!("{}:a.txt", refs.stashes[0].hash)]).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "three\n", "the discarded text is in the stash");
     // An untracked file goes to the trash, from where it comes back (only when the
@@ -5195,7 +5195,7 @@ fn git_commits_checked_out_branched_tagged_and_reset() {
     let said = run(&d, &Op::Reset { to: third.clone(), hard: true }).unwrap();
     assert_eq!(said, format!("Reset main to {} · it was at {}, your changes kept in the stash", short(&third), short(&first)));
     assert!(work_of(&d).is_empty());
-    assert!(git_said(&d, &["stash", "list"]).contains("Before resetting main in Maia"));
+    assert!(git_said(&d, &["stash", "list"]).contains("Before resetting main in Mochi"));
     // With nothing uncommitted, nothing is stashed.
     assert_eq!(run(&d, &Op::Reset { to: second.clone(), hard: true }).unwrap(), format!("Reset main to {} · it was at {}", short(&second), short(&third)));
     assert_eq!(git_said(&d, &["stash", "list"]).lines().count(), 1);
@@ -6407,7 +6407,7 @@ fn wallpaper_each_desktop_its_way() {
     assert_eq!(calls[2], ["xfconf-query", "-c", "xfce4-desktop", "-l"]);
     assert_eq!(set(&t, &desk("Hyprland", &["hyprpaper"]), plain).unwrap_err(), "Couldn't set the wallpaper: wallpaper failed (not preloaded)");
     assert_eq!(set(&t, &desk("KDE", &[]), plain).unwrap_err(), "Couldn't set the wallpaper: Unable to find the wallpaper plugin");
-    assert_eq!(set(&t, &desk("sway", &[]), plain).unwrap_err(), "Maia can't set the wallpaper on this desktop", "swaymsg isn't there");
+    assert_eq!(set(&t, &desk("sway", &[]), plain).unwrap_err(), "Mochi can't set the wallpaper on this desktop", "swaymsg isn't there");
     assert!(crate::wallpaper::is_wallpaper("jpg") && crate::wallpaper::is_wallpaper("webp") && !crate::wallpaper::is_wallpaper("gif") && !crate::wallpaper::is_wallpaper("svg"));
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -14729,13 +14729,13 @@ fn same_named_tabs_tell_themselves_apart() {
 /// The window's title names the folder shown.
 #[test]
 fn window_title_names_the_folder() {
-    assert_eq!(crate::app::window_title("Invoices"), "Invoices · Maia");
-    assert_eq!(crate::app::window_title("Computer"), "Computer · Maia");
+    assert_eq!(crate::app::window_title("Invoices"), "Invoices · Mochi");
+    assert_eq!(crate::app::window_title("Computer"), "Computer · Mochi");
     assert_eq!(crate::app::window_title(""), "Maia");
-    assert_eq!(crate::app::window_title("a\0b"), "ab · Maia", "no NUL for X11's title property");
+    assert_eq!(crate::app::window_title("a\0b"), "ab · Mochi", "no NUL for X11's title property");
     let d = tmpdir("wintitle");
     let mut app = crate::app::App::new(&egui::Context::default(), vec![d.clone()]);
-    assert_eq!(crate::app::window_title(&app.tab().title()), format!("{} · Maia", d.file_name().unwrap().to_string_lossy()));
+    assert_eq!(crate::app::window_title(&app.tab().title()), format!("{} · Mochi", d.file_name().unwrap().to_string_lossy()));
 }
 
 /// A drive says it is filling only from 80%, in red from 95%.

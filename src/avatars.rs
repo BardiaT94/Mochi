@@ -221,7 +221,7 @@ pub type Get = Arc<dyn Fn(&str, &dyn Fn() -> bool) -> Http + Send + Sync>;
 /// user's (tokens, netrc, extra headers) goes along, and only https is spoken, redirects
 /// included.
 pub fn curl_args(url: &str) -> Vec<String> {
-    let mut a: Vec<String> = ["-q", "--silent", "--location", "--max-redirs", "5", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "5", "--max-time", "10", "--user-agent", "Maia"].map(String::from).to_vec();
+    let mut a: Vec<String> = ["-q", "--silent", "--location", "--max-redirs", "5", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "5", "--max-time", "10", "--user-agent", "Mochi"].map(String::from).to_vec();
     a.extend(["--max-filesize".into(), BODY_CAP.to_string(), "--write-out".into(), "\n%{http_code}".into()]);
     if url.starts_with("https://api.github.com/") {
         a.extend(["--header".into(), "Accept: application/vnd.github+json".into()]);

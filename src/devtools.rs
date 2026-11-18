@@ -605,7 +605,7 @@ pub fn code_search_popup(app: &mut App, ctx: &egui::Context, st: &mut CodeState)
                 }
             });
         }
-        pp::hints(ui, &[("Enter", "open in editor"), ("Ctrl+Enter", "show in Maia"), ("Ctrl+Shift+C", "copy path:line"), ("Tab", "files"), ("Esc", "close")], &pal);
+        pp::hints(ui, &[("Enter", "open in editor"), ("Ctrl+Enter", "show in Mochi"), ("Ctrl+Shift+C", "copy path:line"), ("Tab", "files"), ("Esc", "close")], &pal);
     });
     if let Some(seq) = toggle_file {
         if !st.collapsed.remove(&seq) {

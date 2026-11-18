@@ -230,7 +230,7 @@ pub fn run(app: &mut crate::app::App, cmd: crate::commands::Cmd) {
                 return;
             };
             let Some(tools) = crate::drives::Tools::current() else {
-                app.toast("Maia can't set the wallpaper on this desktop");
+                app.toast("Mochi can't set the wallpaper on this desktop");
                 return;
             };
             let (path, desktop) = (path.clone(), crate::wallpaper::desktop());

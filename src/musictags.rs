@@ -138,7 +138,7 @@ pub fn write_args(ext: &str, changes: &[(usize, String)], cover: &Cover) -> Vec<
 pub fn write(t: &Tools, path: &Path, changes: &[(usize, String)], cover: &Cover) -> Result<(), String> {
     let ext = ext_of(path);
     if !taggable(&ext) {
-        return Err("Maia can't write tags into this kind of file".into());
+        return Err("Mochi can't write tags into this kind of file".into());
     }
     let part = path.with_file_name(format!(".{}.part", name_of(path)));
     let mut c = t.cmd("ffmpeg");

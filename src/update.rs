@@ -199,7 +199,7 @@ pub type Fetch = Arc<dyn Fn(&str, Option<&Path>) -> Result<Vec<u8>, String> + Se
 
 /// The command for one GET. `-q` first, so no ~/.curlrc is read.
 pub fn curl_args(url: &str, to: Option<&Path>) -> Vec<String> {
-    let mut a: Vec<String> = ["-q", "--silent", "--show-error", "--fail", "--location", "--max-redirs", "5", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "10", "--max-time", "180", "--user-agent", "Maia"].map(String::from).to_vec();
+    let mut a: Vec<String> = ["-q", "--silent", "--show-error", "--fail", "--location", "--max-redirs", "5", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "10", "--max-time", "180", "--user-agent", "Mochi"].map(String::from).to_vec();
     a.extend(["--max-filesize".into(), MAX_BIN.to_string()]);
     if url.starts_with("https://api.github.com/") {
         a.extend(["--header".into(), "Accept: application/vnd.github+json".into()]);
@@ -379,15 +379,15 @@ pub fn update_now() -> Result<String, String> {
     let r = parse_release(&body).ok_or("The latest release has no build for this system")?;
     let current = env!("CARGO_PKG_VERSION");
     if !newer(current, &r.version) {
-        return Ok(format!("Maia {current} is the latest"));
+        return Ok(format!("Mochi {current} is the latest"));
     }
     let tools = crate::drives::Tools::current();
     let how = installed(&exe, running_appimage(&exe).as_deref(), tools.as_ref());
     if let Installed::Elsewhere(dir) = &how {
-        return Err(format!("Can't write to {}: update Maia the way it was installed", dir.display()));
+        return Err(format!("Can't write to {}: update Mochi the way it was installed", dir.display()));
     }
     apply(&r, &how, &exe, &work_dir(), &fetch, tools.as_ref(), &|| {})?;
-    Ok(format!("Updated Maia {current} to {}; start it again to use it", r.version.trim_start_matches('v')))
+    Ok(format!("Updated Mochi {current} to {}; start it again to use it", r.version.trim_start_matches('v')))
 }
 
 /// Put release `r` in place for an install of kind `how`. `installing` is told when the
@@ -470,7 +470,7 @@ fn replace_checked(target: &Path, url: &str, want: &str, fetch: &Fetch, version:
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
         if !runs(&tmp, version) {
-            return Err("This release doesn't run on this system; Maia is unchanged".to_string());
+            return Err("This release doesn't run on this system; Mochi is unchanged".to_string());
         }
         std::fs::rename(&tmp, target).map_err(|e| e.to_string())
     })();

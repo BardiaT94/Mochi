@@ -384,7 +384,7 @@ pub fn pill_r(r: Rect) -> CornerRadius {
 /// The commands the palette offers: Maia's, less the recent-files ones Mochi left out.
 pub static COMMANDS: std::sync::LazyLock<Vec<crate::commands::Cmd>> = std::sync::LazyLock::new(|| {
     use crate::commands::Cmd;
-    crate::commands::ALL.iter().copied().filter(|c| !matches!(c, Cmd::Timeline | Cmd::ToggleRecents | Cmd::ToggleRecentsOnTop | Cmd::ToggleReadme | Cmd::ToggleBookmark)).collect()
+    crate::commands::ALL.iter().copied().filter(|c| !matches!(c, Cmd::Timeline | Cmd::ToggleRecents | Cmd::ToggleRecentsOnTop | Cmd::ToggleReadme)).collect()
 });
 
 // ------------------------------------------------------------------ updating

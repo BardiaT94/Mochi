@@ -549,7 +549,7 @@ impl Op {
     }
 }
 
-pub const FILTERED: &str = "This repository's own settings filter its files, which Maia doesn't run. Use a terminal for this one.";
+pub const FILTERED: &str = "This repository's own settings filter its files, which Mochi doesn't run. Use a terminal for this one.";
 
 /// A branch `git branch -d` kept: its commits are on no other branch. The app asks
 /// whether to delete it anyway.
@@ -710,7 +710,7 @@ pub fn run(root: &Path, op: &Op) -> Result<String, String> {
             crate::trashcan::delete(&p).map(|_| format!("Moved {} to the trash", short(&f.path))).map_err(|e| crate::fsx::plain_error(&e.to_string()).to_string())
         }
         Op::Discard(f) => {
-            let msg = format!("Discarded in Maia: {}", f.path);
+            let msg = format!("Discarded in Mochi: {}", f.path);
             let mut a = vec!["stash".to_string(), "push".into(), "-q".into(), "--keep-index".into(), "-m".into(), msg, "--".into(), f.path.clone()];
             a.extend(f.from.clone());
             call(a, None, quick).map(|_| format!("Discarded the changes to {} · kept in the stash", short(&f.path)))
@@ -803,7 +803,7 @@ pub fn run(root: &Path, op: &Op) -> Result<String, String> {
             let stash = || read(root, &["rev-parse", "-q", "--verify", "refs/stash"], 4096);
             let before = stash();
             if *hard {
-                exec(root, &["stash", "push", "-q", "-m", &format!("Before resetting {b} in Maia")], None, quick)?;
+                exec(root, &["stash", "push", "-q", "-m", &format!("Before resetting {b} in Mochi")], None, quick)?;
             }
             exec(root, &["reset", "-q", if *hard { "--hard" } else { "--mixed" }, to], None, quick)?;
             let kept = if stash() != before { ", your changes kept in the stash" } else { "" };

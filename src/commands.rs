@@ -387,7 +387,7 @@ commands! {
     Palette, "palette", Misc, "Command Palette", "Search every command and assign hotkeys.", ["Ctrl+Shift+P"];
     Options, "options", Misc, "Options", "Change appearance, behavior and defaults.", ["Ctrl+Comma"];
     WhatsUsingPort, "whats_using_port", Misc, "What's Using a Port…", "List the network ports programs listen on, whose they are, and stop your own.", [];
-    CheckUpdates, "check_updates", Misc, "Check for Updates", "Ask GitHub whether a newer Maia is out, and update from Options.", [];
+    CheckUpdates, "check_updates", Misc, "Check for Updates", "Ask GitHub whether Maia has new commits for Mochi, and update from Options.", [];
     ChooseTheme, "choose_theme", Misc, "Choose Theme", "See every color theme side by side, with its code colors, and pick one.", [];
     MainMenu, "main_menu", Misc, "Main Menu", "Open the main menu.", ["F10"];
     QuickMenu, "quick_menu", Misc, "Quick Menu", "Your starred commands in a small menu.", [];
@@ -398,13 +398,13 @@ commands! {
     FontSmaller, "font_smaller", Misc, "Decrease Font Size", "Make text smaller.", ["Ctrl+Shift+Minus"];
     ToggleAnimations, "toggle_animations", Misc, "Toggle Animations", "Turn all animations on or off.", [];
     OpenConfig, "open_config", Misc, "Open Config", "Open the settings file in your editor.", [];
-    RevealConfig, "reveal_config", Misc, "Reveal Config Folder", "Open the folder that holds Maia's settings.", [];
+    RevealConfig, "reveal_config", Misc, "Reveal Config Folder", "Open the folder that holds Mochi's settings.", [];
     ResetConfig, "reset_config", Misc, "Reset Settings", "Restore all options and hotkeys to defaults (asks first).", [];
     Install, "install", Misc, "Install Mochi", "Add Mochi to your app launcher and ~/.local/bin.", [];
-    SetDefault, "set_default_fm", Misc, "Set As Default File Manager", "Make Maia open folders for other apps.", [];
+    SetDefault, "set_default_fm", Misc, "Set As Default File Manager", "Make Mochi open folders for other apps.", [];
     Uninstall, "uninstall", Misc, "Uninstall Mochi", "Remove the launcher entry and installed binary.", [];
-    Welcome, "welcome_tour", Misc, "Welcome Tour", "The pages shown on the first start: what Maia does, and a few choices to make it yours.", [];
-    WhatsNew, "whats_new", Misc, "What's New in Maia", "What this version added, with the main changes shown at work.", [];
+    Welcome, "welcome_tour", Misc, "Welcome Tour", "The pages shown on the first start: what Mochi does, and a few choices to make it yours.", [];
+    WhatsNew, "whats_new", Misc, "What's New in Mochi", "What this version added, with the main changes shown at work.", [];
     About, "about", Misc, "About Mochi", "Version and credits.", [];
 }
 

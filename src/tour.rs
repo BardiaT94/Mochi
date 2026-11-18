@@ -136,7 +136,7 @@ pub const WELCOME: &[Page] = &[
 
 pub const NEWS: &[Page] = &[
     Page {
-        title: "Maia 0.7.0",
+        title: "Mochi 0.7.0",
         text: "A calmer look throughout, twenty more themes, your GitHub profile beside your files, and names in every script. The next pages show them at work.",
         body: Body::Hero,
         keys: &[],
@@ -190,7 +190,7 @@ pub const ALSO: &[(&str, &[(&str, &str, &str)])] = &[
             ("file", "Every name opens", "Paths whose names are not UTF-8 open from the command line and from other apps."),
         ],
     ),
-    ("Around the desktop", &[("monitor", "No window at login", "A dock that asks Maia about itself at login no longer opens a window.")]),
+    ("Around the desktop", &[("monitor", "No window at login", "A dock that asks Mochi about itself at login no longer opens a window.")]),
 ];
 
 pub fn pages(kind: Kind) -> &'static [Page] {
@@ -422,7 +422,7 @@ fn closed(app: &mut App, st: &State) -> bool {
     if st.auto {
         app.toast(match st.kind {
             Kind::Welcome => "The tour is in the command palette: Welcome Tour",
-            Kind::News => "This is in the command palette: What's New in Maia",
+            Kind::News => "This is in the command palette: What's New in Mochi",
         });
     }
     false
@@ -667,7 +667,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         let last = st.page + 1 == n;
         let label = match (st.kind, st.page, last) {
             (Kind::Welcome, 0, _) => "Get started",
-            (Kind::Welcome, _, true) => "Start using Maia",
+            (Kind::Welcome, _, true) => "Start using Mochi",
             (Kind::News, 0, _) => "See what's new",
             (Kind::News, _, true) => "Done",
             _ => "Continue",
@@ -1185,7 +1185,7 @@ fn step_extras(ui: &mut Ui, app: &mut App, area: Rect) -> bool {
         }
         flipped
     };
-    if row(ui, fm, &mut default, "Open folders in Maia", "When another app or the desktop opens one", "welcome default", "folder") {
+    if row(ui, fm, &mut default, "Open folders in Mochi", "When another app or the desktop opens one", "welcome default", "folder") {
         app.set_default_fm(default);
     }
     let mut sem = app.cfg.semantic_search;
