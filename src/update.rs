@@ -11,17 +11,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Where the releases are.
-pub const REPO: &str = "yappologistic/Maia";
+pub const REPO: &str = "BardiaT94/Mochi";
 /// A release's files for this machine's processor: the program, and its SHA-256 as
 /// `sha256sum` writes it ("maia-linux-x86_64", "maia-linux-aarch64").
 #[cfg(target_arch = "aarch64")]
-pub const ASSET: &str = "maia-linux-aarch64";
+pub const ASSET: &str = "mochi-linux-aarch64";
 #[cfg(not(target_arch = "aarch64"))]
-pub const ASSET: &str = "maia-linux-x86_64";
+pub const ASSET: &str = "mochi-linux-x86_64";
 #[cfg(target_arch = "aarch64")]
-pub const SUMS: &str = "maia-linux-aarch64.sha256";
+pub const SUMS: &str = "mochi-linux-aarch64.sha256";
 #[cfg(not(target_arch = "aarch64"))]
-pub const SUMS: &str = "maia-linux-x86_64.sha256";
+pub const SUMS: &str = "mochi-linux-x86_64.sha256";
 /// This machine's processor as the packages name it.
 #[cfg(target_arch = "aarch64")]
 const ARCH: &str = "aarch64";
@@ -163,6 +163,12 @@ pub fn version(v: &str) -> Option<(u64, u64, u64)> {
     n.next().is_none().then_some((major, minor, patch))
 }
 
+/// The version releases are compared with: Mochi's own (Maia's in tests, whose releases
+/// they fake).
+fn current() -> &'static str {
+    if cfg!(test) { env!("CARGO_PKG_VERSION") } else { crate::mochi::version() }
+}
+
 /// Whether `candidate` is a later version than `current`.
 pub fn newer(current: &str, candidate: &str) -> bool {
     matches!((version(current), version(candidate)), (Some(a), Some(b)) if b > a)
@@ -237,7 +243,7 @@ fn runs(path: &Path, version: &str) -> bool {
     let mut c = std::process::Command::new(path);
     // An AppImage unpacked rather than mounted, so a system without FUSE can try it too.
     c.arg("--version").env("APPIMAGE_EXTRACT_AND_RUN", "1");
-    crate::media::output(c, Duration::from_secs(10)).is_some_and(|out| String::from_utf8_lossy(&out).trim() == format!("maia {}", version.trim_start_matches(['v', 'V'])))
+    crate::media::output(c, Duration::from_secs(10)).is_some_and(|out| String::from_utf8_lossy(&out).trim().starts_with(&format!("mochi {} ", version.trim_start_matches(['v', 'V']))))
 }
 
 /// Test builds' stand-in programs aren't real ones.
@@ -293,8 +299,9 @@ impl Updater {
         if self.busy() {
             return;
         }
-        // Mochi: Maia's releases would drop the redesign; rebuild from the upstream clone.
-        if cfg!(not(test)) {
+        // Mochi: on Bardia's machine, rebuild from the upstream clone; anywhere else,
+        // Mochi's own releases.
+        if cfg!(not(test)) && crate::mochi::dev_setup() {
             return crate::mochi::check(self.state.clone(), ctx.clone());
         }
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = State::Checking;
@@ -303,7 +310,7 @@ impl Updater {
             let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
             let next = match fetch(&url, None) {
                 Ok(body) => match parse_release(&body) {
-                    Some(r) if newer(env!("CARGO_PKG_VERSION"), &r.version) => State::Available(r),
+                    Some(r) if newer(current(), &r.version) => State::Available(r),
                     Some(_) => State::Latest,
                     None => State::Failed("The latest release has no build for this system".into()),
                 },
@@ -319,7 +326,7 @@ impl Updater {
         if self.busy() {
             return;
         }
-        if cfg!(not(test)) {
+        if cfg!(not(test)) && crate::mochi::dev_setup() {
             return crate::mochi::install(self.state.clone(), r.version, ctx.clone());
         }
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = State::Downloading(r.version.clone());
@@ -377,7 +384,7 @@ pub fn update_now() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let body = fetch(&format!("https://api.github.com/repos/{REPO}/releases/latest"), None)?;
     let r = parse_release(&body).ok_or("The latest release has no build for this system")?;
-    let current = env!("CARGO_PKG_VERSION");
+    let current = current();
     if !newer(current, &r.version) {
         return Ok(format!("Mochi {current} is the latest"));
     }

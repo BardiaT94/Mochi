@@ -105,6 +105,9 @@ mod grew;
 mod hints;
 mod marks;
 mod mochi;
+/// Mochi: folders' own colours and symbols.
+mod folderlook;
+mod folderglyphs;
 mod graphics;
 mod qr;
 mod query;
@@ -199,7 +202,7 @@ fn main() {
                 return;
             }
             "-V" | "--version" => {
-                println!("mochi {} (on Maia {})", env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_VERSION"));
+                println!("mochi {} (on Maia {})", mochi::version(), env!("CARGO_PKG_VERSION"));
                 return;
             }
             "--update" => {
