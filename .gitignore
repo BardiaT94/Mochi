@@ -8,6 +8,8 @@
 !/AI-CONTRIBUTING.md
 !/LICENSE
 !/build-dist.sh
+# Mochi: its own version number.
+!/MOCHI_VERSION
 
 !/src/
 /src/**
