@@ -607,3 +607,20 @@ pub fn visual(text: &str) -> std::borrow::Cow<'_, str> {
     let out: String = bidi.paragraphs.iter().map(|p| bidi.reorder_line(p, p.range.clone()).into_owned()).collect();
     out.into()
 }
+
+// ------------------------------------------------------------------ older systems
+
+// glibc 2.43 gave `acosf` and `atan2f` new symbol versions, so a build made on a current
+// system asked for glibc 2.43 just for them. Mochi carries its own, through the f64 ones
+// every glibc has, and its releases run on glibc 2.35 like Maia's.
+#[cfg(all(target_os = "linux", not(test)))]
+#[unsafe(no_mangle)]
+pub extern "C" fn acosf(x: f32) -> f32 {
+    (x as f64).acos() as f32
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+#[unsafe(no_mangle)]
+pub extern "C" fn atan2f(y: f32, x: f32) -> f32 {
+    (y as f64).atan2(x as f64) as f32
+}
