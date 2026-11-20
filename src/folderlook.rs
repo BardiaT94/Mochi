@@ -393,12 +393,14 @@ pub fn restore(ch: &[Change], undo: bool) -> (Vec<Change>, usize) {
 pub struct State {
     pub paths: Vec<PathBuf>,
     pub pick: Look,
+    /// Words to find a symbol by.
+    pub query: String,
 }
 
 /// The dialog for these folders, on the look the first one has.
 pub fn open(paths: Vec<PathBuf>) -> crate::popups::Popup {
     let pick = paths.first().map(|p| read(p)).unwrap_or_default();
-    crate::popups::Popup::FolderLook(State { paths, pick })
+    crate::popups::Popup::FolderLook(State { paths, pick, query: String::new() })
 }
 
 fn what(paths: &[PathBuf]) -> String {
@@ -502,9 +504,27 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                 });
             });
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Symbol").color(pal.text_dim));
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Symbol").color(pal.text_dim));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("Search symbols").desired_width(220.0));
+                });
+            });
+            ui.add_space(4.0);
             let cols = ((ui.available_width() + 4.0) / (cell + 4.0)).floor().max(1.0) as usize;
-            let groups = std::iter::once(("", &[("", "None", "")][..])).chain(GROUPS.iter().copied());
+            // A search shows the matches in one run (a group's name finds its symbols too).
+            let q = st.query.trim().to_lowercase();
+            let found: Vec<(&str, &str, &str)> = if q.is_empty() {
+                vec![]
+            } else {
+                let q = q.as_str();
+                GROUPS.iter().flat_map(|g| g.1.iter().filter(move |s| s.1.to_lowercase().contains(q) || s.0.replace('_', " ").contains(q) || g.0.to_lowercase().contains(q))).copied().collect()
+            };
+            let none: &[(&str, &str, &str)] = &[("", "None", "")];
+            let groups: Vec<(&str, &[(&str, &str, &str)])> = if q.is_empty() { std::iter::once(("", none)).chain(GROUPS.iter().copied()).collect() } else { vec![("", none), ("", &found[..])] };
+            if !q.is_empty() && found.is_empty() {
+                ui.label(egui::RichText::new("No symbol by that name").small().color(pal.text_dim));
+            }
             for (gname, syms) in groups {
                 if !gname.is_empty() {
                     ui.add_space(6.0);
